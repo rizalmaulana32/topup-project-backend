@@ -1,98 +1,119 @@
-<p align="center">
-  <a href="http://nestjs.com/" target="blank"><img src="https://nestjs.com/img/logo-small.svg" width="120" alt="Nest Logo" /></a>
-</p>
+# Topup & Affiliate Platform — Backend
 
-[circleci-image]: https://img.shields.io/circleci/build/github/nestjs/nest/master?token=abc123def456
-[circleci-url]: https://circleci.com/gh/nestjs/nest
+A REST API for a game coin top-up service with a built-in affiliate program. Customers buy coin packages and pay through Xendit, affiliates earn commission on purchases made through their referral link, and superadmins run approvals, commission rules, and payouts.
 
-  <p align="center">A progressive <a href="http://nodejs.org" target="_blank">Node.js</a> framework for building efficient and scalable server-side applications.</p>
-    <p align="center">
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/v/@nestjs/core.svg" alt="NPM Version" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/l/@nestjs/core.svg" alt="Package License" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/dm/@nestjs/common.svg" alt="NPM Downloads" /></a>
-<a href="https://circleci.com/gh/nestjs/nest" target="_blank"><img src="https://img.shields.io/circleci/build/github/nestjs/nest/master" alt="CircleCI" /></a>
-<a href="https://discord.gg/G7Qnnhy" target="_blank"><img src="https://img.shields.io/badge/discord-online-brightgreen.svg" alt="Discord"/></a>
-<a href="https://opencollective.com/nest#backer" target="_blank"><img src="https://opencollective.com/nest/backers/badge.svg" alt="Backers on Open Collective" /></a>
-<a href="https://opencollective.com/nest#sponsor" target="_blank"><img src="https://opencollective.com/nest/sponsors/badge.svg" alt="Sponsors on Open Collective" /></a>
-  <a href="https://paypal.me/kamilmysliwiec" target="_blank"><img src="https://img.shields.io/badge/Donate-PayPal-ff3f59.svg" alt="Donate us"/></a>
-    <a href="https://opencollective.com/nest#sponsor"  target="_blank"><img src="https://img.shields.io/badge/Support%20us-Open%20Collective-41B883.svg" alt="Support us"></a>
-  <a href="https://twitter.com/nestframework" target="_blank"><img src="https://img.shields.io/twitter/follow/nestframework.svg?style=social&label=Follow" alt="Follow us on Twitter"></a>
-</p>
-  <!--[![Backers on Open Collective](https://opencollective.com/nest/backers/badge.svg)](https://opencollective.com/nest#backer)
-  [![Sponsors on Open Collective](https://opencollective.com/nest/sponsors/badge.svg)](https://opencollective.com/nest#sponsor)-->
+Built with NestJS, PostgreSQL (via TypeORM), and Xendit for payments and payouts. No frontend here — this is the API only.
 
-## Description
+## Stack
 
-[Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
+- NestJS 11 + TypeScript
+- PostgreSQL + TypeORM
+- Xendit (Invoice API for payments, Payout API for affiliate withdrawals)
+- JWT auth (access + refresh tokens) with bcrypt password hashing
+- Jest for unit + e2e tests
 
-## Project setup
+## Getting started
 
 ```bash
-$ npm install
+npm install
+
+# start a local Postgres (docker-compose.yml is already set up)
+docker compose up -d
+
+# copy the example env and fill in real values
+cp .env.example .env
+
+npm run start:dev
 ```
 
-## Compile and run the project
+The app boots on `http://localhost:3000` with everything under the `/api/v1` prefix.
+
+### Environment variables
+
+| Variable | What it's for |
+|---|---|
+| `DB_HOST`, `DB_PORT`, `DB_USERNAME`, `DB_PASSWORD`, `DB_NAME` | Postgres connection |
+| `XENDIT_SECRET_KEY` | Your Xendit secret key (test mode while developing) |
+| `XENDIT_CALLBACK_TOKEN` | The verification token Xendit shows you under Settings → Developers → Callbacks. We check every incoming webhook against this. |
+| `JWT_SECRET` | Signs access/refresh tokens |
+| `PORT`, `NODE_ENV` | Standard stuff |
+
+`.env` is gitignored — never commit real keys.
+
+### Database
+
+Schema is created automatically on boot (`synchronize: true`) since this is still early/local development. That's fine for now, but before this touches a shared or production database it needs to switch to real migrations instead.
+
+## Testing
 
 ```bash
-# development
-$ npm run start
-
-# watch mode
-$ npm run start:dev
-
-# production mode
-$ npm run start:prod
+npm test          # unit tests
+npm run test:e2e  # e2e tests against a real local Postgres — always runs serially (--runInBand)
 ```
 
-## Run tests
+The e2e suite spins up the real app against Docker Postgres and hits actual HTTP endpoints, so make sure `docker compose up -d` is running first.
 
-```bash
-# unit tests
-$ npm run test
+## API Reference
 
-# e2e tests
-$ npm run test:e2e
+Everything below is prefixed with `/api/v1`. Auth-protected routes need `Authorization: Bearer <access_token>`.
 
-# test coverage
-$ npm run test:cov
-```
+### Customer / top-up (public, no login needed)
 
-## Deployment
+| Method | Path | What it does |
+|---|---|---|
+| `GET` | `/topup/products` | List active coin packages a customer can buy |
+| `POST` | `/topup/check-id` | Validate a game/user ID before checkout. Body: `{ game_code, user_id, zone_id? }` |
+| `POST` | `/topup/checkout` | Start a purchase. Body: `{ product_id, target_user_id, target_zone_id?, affiliate_code? }`. Returns a Xendit invoice URL to pay. |
+| `GET` | `/topup/transactions/:id` | Check a transaction's status (useful after redirecting back from Xendit) |
 
-When you're ready to deploy your NestJS application to production, there are some key steps you can take to ensure it runs as efficiently as possible. Check out the [deployment documentation](https://docs.nestjs.com/deployment) for more information.
+### Auth
 
-If you are looking for a cloud-based platform to deploy your NestJS application, check out [Mau](https://mau.nestjs.com), our official platform for deploying NestJS applications on AWS. Mau makes deployment straightforward and fast, requiring just a few simple steps:
+| Method | Path | What it does |
+|---|---|---|
+| `POST` | `/auth/login` | Body: `{ email, password }`. Returns access + refresh tokens. |
+| `POST` | `/auth/refresh` | Body: `{ refresh_token }`. Returns a fresh access token. |
 
-```bash
-$ npm install -g @nestjs/mau
-$ mau deploy
-```
+### Affiliate
 
-With Mau, you can deploy your application in just a few clicks, allowing you to focus on building features rather than managing infrastructure.
+| Method | Path | Auth | What it does |
+|---|---|---|---|
+| `POST` | `/affiliate/register` | none | Sign up as an affiliate. Body: `{ name, email, password, bank_name, account_number, account_holder }`. Status starts as `pending_approval` until a superadmin approves it. |
+| `GET` | `/affiliate/dashboard` | affiliate | Referral stats, commission balance, and commission history |
+| `POST` | `/affiliate/withdraw` | affiliate | Request a payout. Body: `{ amount }`. Only works once balance ≥ the minimum withdrawal amount. |
 
-## Resources
+### Superadmin
 
-Check out a few resources that may come in handy when working with NestJS:
+Everything here needs a superadmin JWT. There's no self-registration for admins — those accounts get created directly in the database.
 
-- Visit the [NestJS Documentation](https://docs.nestjs.com) to learn more about the framework.
-- For questions and support, please visit our [Discord channel](https://discord.gg/G7Qnnhy).
-- To dive deeper and get more hands-on experience, check out our official video [courses](https://courses.nestjs.com/).
-- Deploy your application to AWS with the help of [NestJS Mau](https://mau.nestjs.com) in just a few clicks.
-- Visualize your application graph and interact with the NestJS application in real-time using [NestJS Devtools](https://devtools.nestjs.com).
-- Need help with your project (part-time to full-time)? Check out our official [enterprise support](https://enterprise.nestjs.com).
-- To stay in the loop and get updates, follow us on [X](https://x.com/nestframework) and [LinkedIn](https://linkedin.com/company/nestjs).
-- Looking for a job, or have a job to offer? Check out our official [Jobs board](https://jobs.nestjs.com).
+| Method | Path | What it does |
+|---|---|---|
+| `GET` | `/admin/affiliates` | List affiliate registrations. Filter with `?status=pending_approval\|active\|inactive`, paginate with `?limit=&offset=` |
+| `POST` | `/admin/affiliates/:id/approve` | Approve an affiliate — activates them and generates their referral code |
+| `POST` | `/admin/affiliates/:id/reject` | Reject an affiliate |
+| `PATCH` | `/admin/affiliates/:id/commission-rate` | Override one affiliate's commission rate. Body: `{ commission_rate }` |
+| `GET` | `/admin/settings` | View global commission rate + minimum withdrawal amount |
+| `PATCH` | `/admin/settings` | Update them. Body: `{ global_commission_rate?, minimum_withdrawal_amount? }` |
+| `GET` | `/admin/products` | List the full product catalog |
+| `POST` | `/admin/products` | Add a product. Body: `{ name, provider_code, base_price, selling_price }` |
+| `PATCH` | `/admin/products/:id` | Edit a product (price, name, status, etc.) |
+| `GET` | `/admin/withdrawals` | List withdrawal requests. Filter with `?status=pending\|approved\|paid\|failed` |
+| `POST` | `/admin/withdrawals/:id/approve` | Approve a withdrawal — this triggers a real Xendit Payout call |
+| `GET` | `/admin/transactions` | Monitor all transactions, paginated |
 
-## Support
+### Webhooks (Xendit calls these — you don't)
 
-Nest is an MIT-licensed open source project. It can grow thanks to the sponsors and support by the amazing backers. If you'd like to join them, please [read more here](https://docs.nestjs.com/support).
+| Method | Path | What it does |
+|---|---|---|
+| `POST` | `/webhooks/xendit/invoice` | Xendit tells us a payment settled here. Triggers coin injection + commission credit. |
+| `POST` | `/webhooks/xendit/disbursement` | Xendit tells us a payout succeeded or failed here. Updates the withdrawal and refunds the balance on failure. |
 
-## Stay in touch
+Both check the `x-callback-token` header against `XENDIT_CALLBACK_TOKEN` and reject anything that doesn't match.
 
-- Author - [Kamil Myśliwiec](https://twitter.com/kammysliwiec)
-- Website - [https://nestjs.com](https://nestjs.com/)
-- Twitter - [@nestframework](https://twitter.com/nestframework)
+## What's still not real
 
-## License
+Worth knowing before you assume everything's production-ready:
 
-Nest is [MIT licensed](https://github.com/nestjs/nest/blob/master/LICENSE).
+- **Provider Top-Up (the actual game coin delivery) is mocked.** `check-id` returns a fake username, `injectCoin` always "succeeds." No real vendor picked yet — swap it out by implementing `ProviderTopUpPort` once you have one.
+- **Xendit payment/payout creation is real and verified**, but the webhook callbacks have only been simulated in tests — nobody's actually paid a real invoice or received a real payout callback yet, because this local setup has no public URL for Xendit to call back to. A tunnel (ngrok or similar) would fix that for testing.
+- **No migrations yet** — schema auto-syncs, which is fine solo but not once this is shared or deployed.
+- **No frontend.** This is API-only by design for now.
