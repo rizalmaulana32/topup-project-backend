@@ -8,6 +8,7 @@ import {
   Post,
   UnauthorizedException,
 } from '@nestjs/common';
+import { ApiExcludeController } from '@nestjs/swagger';
 import { XenditService } from '../../xendit/xendit.service';
 import { AffiliatesService } from '../affiliates.service';
 
@@ -15,7 +16,10 @@ import { AffiliatesService } from '../affiliates.service';
  * Xendit payout callback payloads use snake_case (reference_id, status,
  * ...), read directly from the raw body rather than a class-validator DTO
  * — same pattern as the invoice webhook.
+ *
+ * Excluded from Swagger: Xendit calls this, not a person using the API.
  */
+@ApiExcludeController()
 @Controller('webhooks/xendit')
 export class XenditDisbursementWebhookController {
   private readonly logger = new Logger(

@@ -9,6 +9,7 @@ import {
   Req,
   UseGuards,
 } from '@nestjs/common';
+import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Request } from 'express';
 import { AffiliatesService } from '../affiliates/affiliates.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
@@ -27,6 +28,8 @@ import { UpdateCommissionRateDto } from './dto/update-commission-rate.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
 import { UpdateSettingsDto } from './dto/update-settings.dto';
 
+@ApiTags('admin')
+@ApiBearerAuth()
 @Controller('admin')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Roles(UserRole.SUPERADMIN)
@@ -39,6 +42,7 @@ export class AdminController {
   ) {}
 
   @Get('affiliates')
+  @ApiOperation({ summary: 'List affiliate registrations' })
   async listAffiliates(@Query() query: ListAffiliatesDto) {
     const result = await this.affiliatesService.findAllProfiles({
       status: query.status,
@@ -67,6 +71,9 @@ export class AdminController {
   }
 
   @Post('affiliates/:id/approve')
+  @ApiOperation({
+    summary: 'Approve an affiliate and generate their referral code',
+  })
   async approveAffiliate(
     @Param('id') id: string,
     @Req() request: Request & { user: AuthenticatedUser },
@@ -83,12 +90,14 @@ export class AdminController {
   }
 
   @Post('affiliates/:id/reject')
+  @ApiOperation({ summary: 'Reject an affiliate registration' })
   async rejectAffiliate(@Param('id') id: string) {
     await this.affiliatesService.reject(id);
     return { success: true };
   }
 
   @Patch('affiliates/:id/commission-rate')
+  @ApiOperation({ summary: "Override one affiliate's commission rate" })
   async updateAffiliateCommissionRate(
     @Param('id') id: string,
     @Body() dto: UpdateCommissionRateDto,
@@ -107,6 +116,9 @@ export class AdminController {
   }
 
   @Get('settings')
+  @ApiOperation({
+    summary: 'View global commission rate + minimum withdrawal amount',
+  })
   async getSettings() {
     const settings = await this.settingsService.get();
     return {
@@ -119,6 +131,9 @@ export class AdminController {
   }
 
   @Patch('settings')
+  @ApiOperation({
+    summary: 'Update global commission rate / minimum withdrawal amount',
+  })
   async updateSettings(@Body() dto: UpdateSettingsDto) {
     const settings = await this.settingsService.update({
       globalCommissionRate: dto.global_commission_rate,
@@ -134,12 +149,14 @@ export class AdminController {
   }
 
   @Get('products')
+  @ApiOperation({ summary: 'List the full product catalog' })
   async listProducts() {
     const products = await this.productsService.findAll();
     return { success: true, data: products };
   }
 
   @Post('products')
+  @ApiOperation({ summary: 'Add a product to the catalog' })
   async createProduct(@Body() dto: CreateProductDto) {
     const product = await this.productsService.create({
       name: dto.name,
@@ -151,6 +168,7 @@ export class AdminController {
   }
 
   @Patch('products/:id')
+  @ApiOperation({ summary: 'Edit a product (price, name, status, etc.)' })
   async updateProduct(@Param('id') id: string, @Body() dto: UpdateProductDto) {
     const product = await this.productsService.update(id, {
       name: dto.name,
@@ -163,6 +181,7 @@ export class AdminController {
   }
 
   @Get('withdrawals')
+  @ApiOperation({ summary: 'List commission withdrawal requests' })
   async listWithdrawals(@Query() query: ListWithdrawalsDto) {
     const result = await this.affiliatesService.findAllWithdrawals({
       status: query.status,
@@ -181,6 +200,9 @@ export class AdminController {
   }
 
   @Post('withdrawals/:id/approve')
+  @ApiOperation({
+    summary: 'Approve a withdrawal — triggers a real Xendit payout',
+  })
   async approveWithdrawal(
     @Param('id') id: string,
     @Req() request: Request & { user: AuthenticatedUser },
@@ -200,6 +222,7 @@ export class AdminController {
   }
 
   @Get('transactions')
+  @ApiOperation({ summary: 'Monitor transactions' })
   async listTransactions(@Query() query: ListTransactionsDto) {
     const result = await this.transactionsService.findAll({
       limit: query.limit ?? 20,

@@ -28,6 +28,8 @@ npm run start:dev
 
 The app boots on `http://localhost:3000` with everything under the `/api/v1` prefix.
 
+Once it's running, there's also a live interactive API explorer at **`http://localhost:3000/api/docs`** — same endpoints as the reference below, but you can actually try requests from the browser (there's an "Authorize" button for pasting a JWT once you've logged in).
+
 ### Environment variables
 
 | Variable | What it's for |
@@ -55,7 +57,7 @@ The e2e suite spins up the real app against Docker Postgres and hits actual HTTP
 
 ## API Reference
 
-Everything below is prefixed with `/api/v1`. Auth-protected routes need `Authorization: Bearer <access_token>`.
+Everything below is prefixed with `/api/v1`. Auth-protected routes need `Authorization: Bearer <access_token>`. Prefer clicking through it instead? Run the app and open `/api/docs`.
 
 ### Customer / top-up (public, no login needed)
 

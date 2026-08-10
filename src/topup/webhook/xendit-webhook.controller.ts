@@ -8,6 +8,7 @@ import {
   Post,
   UnauthorizedException,
 } from '@nestjs/common';
+import { ApiExcludeController } from '@nestjs/swagger';
 import { XenditService } from '../../xendit/xendit.service';
 import { TopupService } from '../topup.service';
 
@@ -15,7 +16,10 @@ import { TopupService } from '../topup.service';
  * Xendit callback payloads use snake_case (external_id, status, ...), not
  * the SDK's camelCase model types, so the raw body is read directly here
  * instead of going through a class-validator DTO.
+ *
+ * Excluded from Swagger: Xendit calls this, not a person using the API.
  */
+@ApiExcludeController()
 @Controller('webhooks/xendit')
 export class XenditWebhookController {
   private readonly logger = new Logger(XenditWebhookController.name);
