@@ -27,10 +27,9 @@ import { AdminModule } from './admin/admin.module';
         database: config.getOrThrow<string>('DB_NAME'),
         entities: [Product, Transaction],
         autoLoadEntities: true,
-        // Dev-only convenience; replace with TypeORM migrations before
-        // any shared/staging/production database is used.
-        synchronize:
-          config.get<string>('NODE_ENV', 'development') !== 'production',
+        // Schema is owned by TypeORM migrations (see src/data-source.ts,
+        // src/migrations/) - run `npm run migration:run` after building.
+        synchronize: false,
       }),
     }),
     TopupModule,
