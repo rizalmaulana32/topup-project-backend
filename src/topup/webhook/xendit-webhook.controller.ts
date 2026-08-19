@@ -52,6 +52,8 @@ export class XenditWebhookController {
 
     if (status === 'PAID' || status === 'SETTLED') {
       await this.topupService.handleInvoicePaid(externalId);
+    } else if (status === 'EXPIRED') {
+      await this.topupService.handleInvoiceExpired(externalId);
     } else {
       this.logger.log(
         `Xendit invoice callback for ${externalId} with status ${status} — no action taken.`,

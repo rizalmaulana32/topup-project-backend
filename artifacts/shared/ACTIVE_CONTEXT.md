@@ -3,7 +3,7 @@
 ## Metadata
 - target_project: `backend`
 - created_at: `2026-08-05T00:00:00+07:00`
-- updated_at: `2026-08-10T00:00:00+07:00`
+- updated_at: `2026-08-19T00:00:00+07:00`
 - updated_by: `claude`
 - status: `active`
 - git_branch: `main`
@@ -22,6 +22,8 @@
 - `Requirement baseline exists at dev-doc/topup-affiliate-platform/ (charter, BRD, PRD, use-case, userflow, database-diagram), all updated for Xendit.`
 - `Local Postgres available via development/backend/docker-compose.yml (docker compose up -d); schema is TypeORM synchronize:true in non-production, not migrations yet.`
 - `Checkout is live-verified against the real Xendit test-mode API (real invoice id + checkout-staging.xendit.co URL returned and persisted). Xendit Payout (Disbursement) has only been e2e-tested against a mocked client, never a real call.`
+- `Full real payment loop verified end-to-end on staging 2026-08-19: real checkout -> real Xendit test-mode invoice -> founder paid it in Xendit's sandbox -> real webhook hit https://api.yaytopup.my.id/api/v1/webhooks/xendit/invoice, passed the real XENDIT_CALLBACK_TOKEN check, marked the transaction paid, ran mock coin injection. Test product and transaction deleted afterward.`
+- `Xendit invoice EXPIRED callback now actually updates payment_status (previously acknowledged and ignored). TransactionsService.markExpired + TopupService.handleInvoiceExpired, wired into XenditWebhookController's EXPIRED branch; never downgrades an already-paid transaction. Deployed to staging by scp'ing the 3 changed files + npm run build + pm2 restart (no full re-upload needed for a change this small).`
 - `e2e tests MUST run with --runInBand (already set as the default npm run test:e2e) — running e2e spec files in parallel causes real failures (TypeORM synchronize races, and separate files truncating/reading the same shared dev DB concurrently), not just slowness.`
 - project_state_baseline: `development/backend/artifacts/shared/PROJECT_STATE.md, last verified 2026-08-10`
 
@@ -55,6 +57,8 @@
   - `Frontend of any kind`
 
 ## Latest Work Summary
+- `Set up the real domain https://api.yaytopup.my.id for the staging backend (same day as initial deploy). Domain is proxied through Cloudflare; added a separate nginx site (didn't touch the existing frontend config) reverse-proxying to the PM2 app on port 3000, then ran certbot which successfully issued a real Let's Encrypt cert (HTTP-01 challenge passes through Cloudflare fine) with auto HTTPS redirect. certbot.timer handles renewal. Verified https://api.yaytopup.my.id/api/v1/topup/products and /api/docs both return 200, and HTTP correctly redirects to HTTPS. Confirmed to the founder that the database setup (dedicated topup_app role + topup_affiliate_platform DB, 7 tables) was already done in the prior deploy. The app is still also directly reachable on the bare IP:3000 (unrestricted bind) since that was the original request — flagged as worth restricting to localhost-only now that the domain path exists, not done without being asked.`
+- `Deployed to a real staging server (root@141.11.25.123, Ubuntu 20.04, small VPS shared with an existing yaytopup.my.id frontend). Code uploaded as a tarball (no git clone, no node_modules/.env/dist), npm install + npm run build ran on the server, PostgreSQL installed natively (not Docker, to save RAM on a ~964MB box), app runs under PM2 as a systemd-enabled service (survives reboot). .env assembled entirely server-side: real Xendit key carried over from local, JWT_SECRET and XENDIT_CALLBACK_TOKEN freshly generated on the server. NODE_ENV=staging (not production) so synchronize:true still creates the schema, since no migrations exist yet. Verified externally: GET /api/v1/topup/products (200), GET /api/docs (200), and a real POST /affiliate/register write against the live DB (cleaned up after). See artifacts/access/README.md (scaffold root) for the URLs and full deployment notes — no secrets there, real credentials never left the server or this session's scratchpad.`
 - `Added Swagger/OpenAPI docs (@nestjs/swagger). Live interactive explorer at /api/docs (Bearer auth wired in via the Authorize button); the two Xendit webhook controllers are excluded since Xendit calls those, not a person. Rewrote development/backend/README.md from the default Nest boilerplate into a real, human-written project README with a full manual endpoint table plus a pointer to /api/docs. Verified live: booted the app and confirmed the OpenAPI JSON lists exactly the 19 expected paths, webhooks correctly absent. 41 unit + 32 e2e tests still pass.`
 - `Note: npm flagged 2 high-severity advisories for js-yaml, pulled in transitively by @nestjs/swagger itself (a DoS via slow parsing of attacker-controlled YAML). Not fixed — the suggested fix is a breaking downgrade of @nestjs/swagger, and this app never parses untrusted YAML through it (Swagger UI only renders our own generated spec), so exposure is minimal. Worth another look if @nestjs/swagger ships a patched release.`
 - `Added the three admin list endpoints that were missing against the PRD (GET /admin/affiliates, GET /admin/withdrawals, GET /admin/products, all with optional status filter + pagination on the first two). Without these, a real superadmin had no way to discover which IDs to act on. 41 unit + 30 e2e tests pass.`
@@ -78,12 +82,12 @@
 
 ## Blockers
 - `None for any implemented endpoint.`
-- `Xendit Callback Verification Token is still a local placeholder — both webhook paths remain verified only via the mocked e2e path (no public callback URL in this sandbox).`
-- `No real Xendit Payout has ever been executed (only getPayoutChannels was called, read-only, to verify the channel-code convention) — an actual disbursement would need either a tunnel (e.g. ngrok) or polling getPayoutById to observe the real callback locally.`
+- `Xendit invoice callback (PAID/SETTLED/EXPIRED) is now real-verified end-to-end on staging, not just mocked in e2e — see 2026-08-19 entries above.`
+- `No real Xendit Payout (disbursement) has ever been executed (only getPayoutChannels was called, read-only, to verify the channel-code convention) — an actual disbursement would need a real approved withdrawal walked through POST /admin/withdrawals/:id/approve on staging.`
 - `Real Provider Top-Up vendor still undecided — mock service in use.`
 
 ## Next Exact Step
-- `All five originally-scoped slices are complete. Await founder direction: real Provider Top-Up vendor selection, frontend work, migrations, a live Xendit Payout test, or a new feature area.`
+- `All five originally-scoped slices are complete, and the real Xendit invoice payment loop is verified end-to-end. Await founder direction: a real Xendit Payout (disbursement) test, real Provider Top-Up vendor selection, frontend work, migrations, or a new feature area.`
 
 ## Do Not Repeat
 - `Do not declare a TypeORM @Column with a TS union type (e.g. string | null) without an explicit type: option — reflect-metadata resolves the design type to Object for unions, which TypeORM rejects for Postgres (hit this on Transaction.targetZoneId/referralCode/xenditInvoiceId, fixed by adding type: 'varchar').`

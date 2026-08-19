@@ -89,6 +89,12 @@ export class TransactionsService {
     });
   }
 
+  async markExpired(transactionId: string): Promise<void> {
+    await this.transactionRepository.update(transactionId, {
+      paymentStatus: PaymentStatus.EXPIRED,
+    });
+  }
+
   async markProviderResult(
     transactionId: string,
     result: { success: boolean; response: string },

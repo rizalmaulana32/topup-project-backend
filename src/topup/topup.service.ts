@@ -149,4 +149,30 @@ export class TopupService {
       });
     }
   }
+
+  /**
+   * Called by the Xendit invoice callback controller for an EXPIRED status.
+   * A transaction that already paid (a late "payment received after
+   * expiry" case can still arrive as a separate PAID callback per Xendit's
+   * own settings) must never be downgraded back to expired.
+   */
+  async handleInvoiceExpired(externalId: string): Promise<void> {
+    const transaction =
+      await this.transactionsService.findByExternalId(externalId);
+
+    if (!transaction) {
+      throw new NotFoundException(
+        `Transaction ${externalId} not found for Xendit callback`,
+      );
+    }
+
+    if (transaction.paymentStatus !== PaymentStatus.PENDING) {
+      this.logger.warn(
+        `Expired callback for ${externalId} ignored: transaction is already ${transaction.paymentStatus}.`,
+      );
+      return;
+    }
+
+    await this.transactionsService.markExpired(transaction.id);
+  }
 }
