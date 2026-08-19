@@ -388,6 +388,71 @@ export class AffiliatesService {
   }
 
   /**
+   * Declines a withdrawal before it's ever sent to Xendit (e.g. bad bank
+   * details, suspected fraud) and refunds the locked balance. Distinct from
+   * a Xendit-side FAILED, which happens after approval.
+   */
+  async rejectWithdrawal(
+    withdrawalId: string,
+    adminUserId: string,
+  ): Promise<CommissionWithdrawal> {
+    const withdrawal = await this.findWithdrawalByIdOrFail(withdrawalId);
+
+    if (withdrawal.status !== WithdrawalStatus.PENDING) {
+      throw new ConflictException(
+        `Withdrawal ${withdrawalId} is not pending (current status: ${withdrawal.status})`,
+      );
+    }
+
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+
+    try {
+      const profile = await queryRunner.manager.findOne(AffiliatorProfile, {
+        where: { id: withdrawal.affiliatorId },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!profile) {
+        throw new NotFoundException(
+          `Affiliate profile ${withdrawal.affiliatorId} not found while refunding withdrawal ${withdrawal.id}`,
+        );
+      }
+
+      const refundedBalance =
+        Number(profile.commissionBalance) + Number(withdrawal.amount);
+      await queryRunner.manager.update(AffiliatorProfile, profile.id, {
+        commissionBalance: refundedBalance.toFixed(2),
+      });
+
+      const log = queryRunner.manager.create(CommissionLog, {
+        affiliatorId: profile.id,
+        withdrawalId: withdrawal.id,
+        type: CommissionLogType.CREDIT,
+        amount: withdrawal.amount,
+        balanceAfter: refundedBalance.toFixed(2),
+        description: `Refund for rejected withdrawal ${withdrawal.id}`,
+      });
+      await queryRunner.manager.save(log);
+
+      await queryRunner.manager.update(CommissionWithdrawal, withdrawal.id, {
+        status: WithdrawalStatus.REJECTED,
+        processedBy: adminUserId,
+        processedAt: new Date(),
+      });
+
+      await queryRunner.commitTransaction();
+    } catch (error) {
+      await queryRunner.rollbackTransaction();
+      throw error;
+    } finally {
+      await queryRunner.release();
+    }
+
+    return this.findWithdrawalByIdOrFail(withdrawalId);
+  }
+
+  /**
    * Called by the Xendit disbursement callback controller after the
    * x-callback-token has already been verified. Idempotent: a withdrawal
    * not in `approved` status is ignored (already handled or never sent).

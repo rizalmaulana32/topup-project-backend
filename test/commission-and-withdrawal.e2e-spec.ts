@@ -364,6 +364,63 @@ describe('Commission crediting and withdrawal (e2e)', () => {
     expect(refundLog?.amount).toBe('50000.00');
   });
 
+  it('rejects a withdrawal request and refunds the balance without contacting Xendit', async () => {
+    const requestResponse = await request(app.getHttpServer())
+      .post('/api/v1/affiliate/withdraw')
+      .set('Authorization', `Bearer ${affiliateToken}`)
+      .send({ amount: 30000 })
+      .expect(201);
+    const requestBody = requestResponse.body as {
+      data: { withdrawal_id: string };
+    };
+    const withdrawalId = requestBody.data.withdrawal_id;
+
+    const balanceAfterLock = await profileRepository.findOneOrFail({
+      where: { id: affiliateProfileId },
+    });
+    expect(balanceAfterLock.commissionBalance).toBe('70000.00');
+
+    const rejectResponse = await request(app.getHttpServer())
+      .post(`/api/v1/admin/withdrawals/${withdrawalId}/reject`)
+      .set('Authorization', `Bearer ${superadminToken}`)
+      .expect(201);
+    const rejectBody = rejectResponse.body as { data: { status: string } };
+    expect(rejectBody.data.status).toBe(WithdrawalStatus.REJECTED);
+
+    const rejected = await withdrawalRepository.findOneOrFail({
+      where: { id: withdrawalId },
+    });
+    expect(rejected.status).toBe(WithdrawalStatus.REJECTED);
+    expect(rejected.xenditDisbursementId).toBeNull();
+
+    const refundedProfile = await profileRepository.findOneOrFail({
+      where: { id: affiliateProfileId },
+    });
+    expect(refundedProfile.commissionBalance).toBe('100000.00');
+
+    const logs = await commissionLogRepository.find({
+      where: { affiliatorId: affiliateProfileId, withdrawalId },
+    });
+    expect(logs).toHaveLength(2);
+    const refundLog = logs.find((log) => log.type === CommissionLogType.CREDIT);
+    expect(refundLog).toBeDefined();
+    expect(refundLog?.amount).toBe('30000.00');
+  });
+
+  it('rejects rejecting a withdrawal that is not pending', async () => {
+    const paidRecord = await withdrawalRepository.findOneOrFail({
+      where: {
+        affiliatorId: affiliateProfileId,
+        status: WithdrawalStatus.PAID,
+      },
+    });
+
+    await request(app.getHttpServer())
+      .post(`/api/v1/admin/withdrawals/${paidRecord.id}/reject`)
+      .set('Authorization', `Bearer ${superadminToken}`)
+      .expect(409);
+  });
+
   it('rejects a disbursement webhook with an invalid token', async () => {
     await request(app.getHttpServer())
       .post('/api/v1/webhooks/xendit/disbursement')

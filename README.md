@@ -98,8 +98,9 @@ Everything here needs a superadmin JWT. There's no self-registration for admins 
 | `GET` | `/admin/products` | List the full product catalog |
 | `POST` | `/admin/products` | Add a product. Body: `{ name, provider_code, base_price, selling_price }` |
 | `PATCH` | `/admin/products/:id` | Edit a product (price, name, status, etc.) |
-| `GET` | `/admin/withdrawals` | List withdrawal requests. Filter with `?status=pending\|approved\|paid\|failed` |
+| `GET` | `/admin/withdrawals` | List withdrawal requests. Filter with `?status=pending\|approved\|rejected\|paid\|failed` |
 | `POST` | `/admin/withdrawals/:id/approve` | Approve a withdrawal — this triggers a real Xendit Payout call |
+| `POST` | `/admin/withdrawals/:id/reject` | Decline a withdrawal before it's sent to Xendit (bad bank details, fraud, etc.) — refunds the locked balance |
 | `GET` | `/admin/transactions` | Monitor all transactions, paginated |
 
 ### Webhooks (Xendit calls these — you don't)

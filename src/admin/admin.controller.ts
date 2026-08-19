@@ -221,6 +221,28 @@ export class AdminController {
     };
   }
 
+  @Post('withdrawals/:id/reject')
+  @ApiOperation({
+    summary:
+      'Reject a withdrawal before it is sent to Xendit and refund the locked balance',
+  })
+  async rejectWithdrawal(
+    @Param('id') id: string,
+    @Req() request: Request & { user: AuthenticatedUser },
+  ) {
+    const withdrawal = await this.affiliatesService.rejectWithdrawal(
+      id,
+      request.user.id,
+    );
+    return {
+      success: true,
+      data: {
+        withdrawal_id: withdrawal.id,
+        status: withdrawal.status,
+      },
+    };
+  }
+
   @Get('transactions')
   @ApiOperation({ summary: 'Monitor transactions' })
   async listTransactions(@Query() query: ListTransactionsDto) {
