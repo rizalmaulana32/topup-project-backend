@@ -245,6 +245,38 @@ describe('Topup (e2e)', () => {
     expect(expiredTransaction?.paymentStatus).toBe(PaymentStatus.EXPIRED);
   });
 
+  it('marks a transaction failed on an unrecognized Xendit callback status', async () => {
+    const checkoutResponse = await request(app.getHttpServer())
+      .post('/api/v1/topup/checkout')
+      .send({
+        product_id: testProduct.id,
+        target_user_id: '11223344',
+        target_zone_id: '5566',
+      })
+      .expect(201);
+
+    const body = checkoutResponse.body as {
+      data: { transaction_id: string; xendit_invoice_id: string };
+    };
+    const { transaction_id, xendit_invoice_id } = body.data;
+
+    await request(app.getHttpServer())
+      .post('/api/v1/webhooks/xendit/invoice')
+      .set('x-callback-token', TEST_CALLBACK_TOKEN)
+      .send({
+        external_id: transaction_id,
+        status: 'FAILED',
+        id: xendit_invoice_id,
+      })
+      .expect(200)
+      .expect({ success: true });
+
+    const failedTransaction = await transactionRepository.findOne({
+      where: { id: transaction_id },
+    });
+    expect(failedTransaction?.paymentStatus).toBe(PaymentStatus.FAILED);
+  });
+
   it('rejects a Xendit callback with an invalid token', async () => {
     await request(app.getHttpServer())
       .post('/api/v1/webhooks/xendit/invoice')

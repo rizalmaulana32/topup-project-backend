@@ -54,10 +54,15 @@ export class XenditWebhookController {
       await this.topupService.handleInvoicePaid(externalId);
     } else if (status === 'EXPIRED') {
       await this.topupService.handleInvoiceExpired(externalId);
-    } else {
+    } else if (status === 'PENDING') {
       this.logger.log(
-        `Xendit invoice callback for ${externalId} with status ${status} — no action taken.`,
+        `Xendit invoice callback for ${externalId} with status PENDING — no action taken.`,
       );
+    } else {
+      this.logger.warn(
+        `Xendit invoice callback for ${externalId} with unrecognized status ${status} — treating as failed.`,
+      );
+      await this.topupService.handleInvoiceFailed(externalId);
     }
 
     return { success: true };

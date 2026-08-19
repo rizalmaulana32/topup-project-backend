@@ -95,6 +95,12 @@ export class TransactionsService {
     });
   }
 
+  async markFailed(transactionId: string): Promise<void> {
+    await this.transactionRepository.update(transactionId, {
+      paymentStatus: PaymentStatus.FAILED,
+    });
+  }
+
   async markProviderResult(
     transactionId: string,
     result: { success: boolean; response: string },

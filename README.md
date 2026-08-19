@@ -107,7 +107,7 @@ Everything here needs a superadmin JWT. There's no self-registration for admins 
 
 | Method | Path | What it does |
 |---|---|---|
-| `POST` | `/webhooks/xendit/invoice` | Xendit tells us a payment settled here. Triggers coin injection + commission credit. |
+| `POST` | `/webhooks/xendit/invoice` | Xendit tells us how a payment went. `PAID`/`SETTLED` triggers coin injection + commission credit, `EXPIRED` marks the transaction expired, anything else unrecognized marks it failed. |
 | `POST` | `/webhooks/xendit/disbursement` | Xendit tells us a payout succeeded or failed here. Updates the withdrawal and refunds the balance on failure. |
 
 Both check the `x-callback-token` header against `XENDIT_CALLBACK_TOKEN` and reject anything that doesn't match.

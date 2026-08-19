@@ -175,4 +175,32 @@ export class TopupService {
 
     await this.transactionsService.markExpired(transaction.id);
   }
+
+  /**
+   * Called by the Xendit invoice callback controller for any status that
+   * isn't PAID/SETTLED/EXPIRED. Xendit's Invoice API doesn't currently emit
+   * a distinct "payment failed" status (it only ever sends
+   * PENDING/PAID/SETTLED/EXPIRED), but PaymentStatus.FAILED is part of the
+   * source ERD, so any unrecognized status is treated as a failure rather
+   * than left stuck pending forever.
+   */
+  async handleInvoiceFailed(externalId: string): Promise<void> {
+    const transaction =
+      await this.transactionsService.findByExternalId(externalId);
+
+    if (!transaction) {
+      throw new NotFoundException(
+        `Transaction ${externalId} not found for Xendit callback`,
+      );
+    }
+
+    if (transaction.paymentStatus !== PaymentStatus.PENDING) {
+      this.logger.warn(
+        `Failed callback for ${externalId} ignored: transaction is already ${transaction.paymentStatus}.`,
+      );
+      return;
+    }
+
+    await this.transactionsService.markFailed(transaction.id);
+  }
 }

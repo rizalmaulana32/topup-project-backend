@@ -27,6 +27,7 @@ describe('TopupService', () => {
       | 'findByExternalId'
       | 'markPaid'
       | 'markExpired'
+      | 'markFailed'
       | 'markProviderResult'
     >
   >;
@@ -61,6 +62,7 @@ describe('TopupService', () => {
       findByExternalId: jest.fn(),
       markPaid: jest.fn(),
       markExpired: jest.fn(),
+      markFailed: jest.fn(),
       markProviderResult: jest.fn(),
     };
     xenditService = { createInvoice: jest.fn() };
@@ -326,6 +328,46 @@ describe('TopupService', () => {
 
       await expect(
         service.handleInvoiceExpired('missing'),
+      ).rejects.toBeInstanceOf(NotFoundException);
+    });
+  });
+
+  describe('handleInvoiceFailed', () => {
+    it('marks a pending transaction as failed', async () => {
+      const transaction = {
+        id: 'TRX-20260805-0008',
+        paymentStatus: PaymentStatus.PENDING,
+      };
+      transactionsService.findByExternalId.mockResolvedValue(
+        transaction as any,
+      );
+
+      await service.handleInvoiceFailed('TRX-20260805-0008');
+
+      expect(transactionsService.markFailed).toHaveBeenCalledWith(
+        'TRX-20260805-0008',
+      );
+    });
+
+    it('does not downgrade an already-paid transaction', async () => {
+      const transaction = {
+        id: 'TRX-20260805-0009',
+        paymentStatus: PaymentStatus.PAID,
+      };
+      transactionsService.findByExternalId.mockResolvedValue(
+        transaction as any,
+      );
+
+      await service.handleInvoiceFailed('TRX-20260805-0009');
+
+      expect(transactionsService.markFailed).not.toHaveBeenCalled();
+    });
+
+    it('throws NotFoundException when the transaction does not exist', async () => {
+      transactionsService.findByExternalId.mockResolvedValue(null);
+
+      await expect(
+        service.handleInvoiceFailed('missing'),
       ).rejects.toBeInstanceOf(NotFoundException);
     });
   });
