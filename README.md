@@ -44,7 +44,14 @@ Once it's running, there's also a live interactive API explorer at **`http://loc
 
 ### Database
 
-Schema is created automatically on boot (`synchronize: true`) since this is still early/local development. That's fine for now, but before this touches a shared or production database it needs to switch to real migrations instead.
+Schema is managed with real TypeORM migrations (`src/migrations/`, `src/data-source.ts`) — `synchronize` is off everywhere. After `docker compose up -d`, run:
+
+```bash
+npm run build
+npm run migration:run
+```
+
+To make a schema change: edit an entity, then `npm run migration:generate -- src/migrations/YourMigrationName` (needs a running DB to diff against), review the generated file, and run `migration:run` again.
 
 ## Testing
 
@@ -118,5 +125,4 @@ Worth knowing before you assume everything's production-ready:
 
 - **Provider Top-Up (the actual game coin delivery) is mocked.** `check-id` returns a fake username, `injectCoin` always "succeeds." No real vendor picked yet — swap it out by implementing `ProviderTopUpPort` once you have one.
 - **Xendit payment/payout creation is real and verified**, but the webhook callbacks have only been simulated in tests — nobody's actually paid a real invoice or received a real payout callback yet, because this local setup has no public URL for Xendit to call back to. A tunnel (ngrok or similar) would fix that for testing.
-- **No migrations yet** — schema auto-syncs, which is fine solo but not once this is shared or deployed.
 - **No frontend.** This is API-only by design for now.
