@@ -163,6 +163,9 @@ export class AdminController {
       providerCode: dto.provider_code,
       basePrice: dto.base_price,
       sellingPrice: dto.selling_price,
+      coinAmount: dto.coin_amount,
+      bonusCoin: dto.bonus_coin,
+      flag: dto.flag,
     });
     return { success: true, data: product };
   }
@@ -175,6 +178,9 @@ export class AdminController {
       providerCode: dto.provider_code,
       basePrice: dto.base_price,
       sellingPrice: dto.selling_price,
+      coinAmount: dto.coin_amount,
+      bonusCoin: dto.bonus_coin,
+      flag: dto.flag,
       status: dto.status,
     });
     return { success: true, data: product };

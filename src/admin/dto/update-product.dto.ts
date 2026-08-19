@@ -30,6 +30,20 @@ export class UpdateProductDto {
   selling_price?: number;
 
   @IsOptional()
+  @IsNumber()
+  @Min(0)
+  coin_amount?: number;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  bonus_coin?: number;
+
+  @IsOptional()
+  @IsString()
+  flag?: string;
+
+  @IsOptional()
   @IsEnum(ProductStatus)
   status?: ProductStatus;
 }

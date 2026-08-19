@@ -8,6 +8,9 @@ interface CreateProductParams {
   providerCode: string;
   basePrice: number;
   sellingPrice: number;
+  coinAmount: number;
+  bonusCoin?: number;
+  flag?: string;
 }
 
 interface UpdateProductParams {
@@ -15,6 +18,9 @@ interface UpdateProductParams {
   providerCode?: string;
   basePrice?: number;
   sellingPrice?: number;
+  coinAmount?: number;
+  bonusCoin?: number;
+  flag?: string;
   status?: ProductStatus;
 }
 
@@ -62,6 +68,9 @@ export class ProductsService {
       providerCode: params.providerCode,
       basePrice: params.basePrice.toFixed(2),
       sellingPrice: params.sellingPrice.toFixed(2),
+      coinAmount: params.coinAmount.toFixed(2),
+      bonusCoin: (params.bonusCoin ?? 0).toFixed(2),
+      flag: params.flag ?? null,
     });
     return this.productRepository.save(product);
   }
@@ -76,6 +85,11 @@ export class ProductsService {
       product.basePrice = params.basePrice.toFixed(2);
     if (params.sellingPrice !== undefined)
       product.sellingPrice = params.sellingPrice.toFixed(2);
+    if (params.coinAmount !== undefined)
+      product.coinAmount = params.coinAmount.toFixed(2);
+    if (params.bonusCoin !== undefined)
+      product.bonusCoin = params.bonusCoin.toFixed(2);
+    if (params.flag !== undefined) product.flag = params.flag;
     if (params.status !== undefined) product.status = params.status;
 
     return this.productRepository.save(product);

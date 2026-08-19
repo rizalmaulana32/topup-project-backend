@@ -251,11 +251,19 @@ describe('Admin (e2e)', () => {
         provider_code: 'ml_250',
         base_price: 30000,
         selling_price: 40000,
+        coin_amount: 250,
+        bonus_coin: 10,
+        flag: 'Terlaris',
       })
       .expect(201);
 
-    const createBody = createResponse.body as { data: { id: string } };
+    const createBody = createResponse.body as {
+      data: { id: string; coinAmount: string; bonusCoin: string; flag: string };
+    };
     expect(createBody.data.id).toBeDefined();
+    expect(createBody.data.coinAmount).toBe('250.00');
+    expect(createBody.data.bonusCoin).toBe('10.00');
+    expect(createBody.data.flag).toBe('Terlaris');
 
     const updateResponse = await request(app.getHttpServer())
       .patch(`/api/v1/admin/products/${createBody.data.id}`)

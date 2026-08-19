@@ -34,6 +34,9 @@ export class TopupService {
       id: product.id,
       name: product.name,
       selling_price: product.sellingPrice,
+      coin_amount: product.coinAmount,
+      bonus_coin: product.bonusCoin,
+      flag: product.flag,
     }));
   }
 

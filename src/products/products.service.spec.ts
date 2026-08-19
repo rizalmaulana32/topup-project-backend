@@ -46,16 +46,43 @@ describe('ProductsService', () => {
         providerCode: 'ml_120',
         basePrice: 15000,
         sellingPrice: 20000,
+        coinAmount: 120,
       });
 
       expect(createMock).toHaveBeenCalledWith(
         expect.objectContaining({
           basePrice: '15000.00',
           sellingPrice: '20000.00',
+          coinAmount: '120.00',
+          bonusCoin: '0.00',
+          flag: null,
         }),
       );
       expect(result).toEqual(
         expect.objectContaining({ basePrice: '15000.00' }),
+      );
+    });
+
+    it('formats bonus_coin and keeps an explicit flag', async () => {
+      createMock.mockImplementation((v: unknown) => v);
+      saveMock.mockImplementation((v: unknown) => Promise.resolve(v));
+
+      await service.create({
+        name: '30M Koin (+600K Bonus)',
+        providerCode: 'MOMO_30M',
+        basePrice: 30000000,
+        sellingPrice: 30000000,
+        coinAmount: 30000000,
+        bonusCoin: 600000,
+        flag: 'Terlaris',
+      });
+
+      expect(createMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          coinAmount: '30000000.00',
+          bonusCoin: '600000.00',
+          flag: 'Terlaris',
+        }),
       );
     });
   });

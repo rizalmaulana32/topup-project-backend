@@ -79,6 +79,7 @@ describe('Topup (e2e)', () => {
         providerCode: 'ml_120_e2e',
         basePrice: '15000',
         sellingPrice: '20000',
+        coinAmount: '120',
         status: ProductStatus.ACTIVE,
       }),
     );
@@ -118,7 +119,14 @@ describe('Topup (e2e)', () => {
 
     const body = response.body as {
       success: boolean;
-      data: { id: string; name: string; selling_price: string }[];
+      data: {
+        id: string;
+        name: string;
+        selling_price: string;
+        coin_amount: string;
+        bonus_coin: string;
+        flag: string | null;
+      }[];
     };
     expect(body.success).toBe(true);
     const listed = body.data.find((p) => p.id === testProduct.id);
@@ -126,6 +134,9 @@ describe('Topup (e2e)', () => {
       id: testProduct.id,
       name: '120 Diamonds (e2e)',
       selling_price: '20000.00',
+      coin_amount: '120.00',
+      bonus_coin: '0.00',
+      flag: null,
     });
     expect(listed).not.toHaveProperty('base_price');
     expect(listed).not.toHaveProperty('basePrice');

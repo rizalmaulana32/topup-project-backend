@@ -44,6 +44,9 @@ describe('TopupService', () => {
     providerCode: 'ml_120',
     basePrice: '15000',
     sellingPrice: '20000',
+    coinAmount: '120',
+    bonusCoin: '0',
+    flag: null,
     status: ProductStatus.ACTIVE,
     createdAt: new Date(),
   };

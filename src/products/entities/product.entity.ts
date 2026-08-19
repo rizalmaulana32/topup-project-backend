@@ -27,6 +27,21 @@ export class Product {
   @Column({ name: 'selling_price', type: 'decimal', precision: 14, scale: 2 })
   sellingPrice: string;
 
+  @Column({ name: 'coin_amount', type: 'decimal', precision: 14, scale: 2 })
+  coinAmount: string;
+
+  @Column({
+    name: 'bonus_coin',
+    type: 'decimal',
+    precision: 14,
+    scale: 2,
+    default: 0,
+  })
+  bonusCoin: string;
+
+  @Column({ type: 'varchar', nullable: true })
+  flag: string | null;
+
   @Column({
     type: 'enum',
     enum: ProductStatus,

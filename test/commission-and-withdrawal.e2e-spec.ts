@@ -169,6 +169,7 @@ describe('Commission crediting and withdrawal (e2e)', () => {
         providerCode: 'ml_2000_e2e',
         basePrice: '1500000.00',
         sellingPrice: '2000000.00',
+        coinAmount: '2000.00',
         status: ProductStatus.ACTIVE,
       }),
     );
