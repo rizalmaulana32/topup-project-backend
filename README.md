@@ -38,6 +38,8 @@ Once it's running, there's also a live interactive API explorer at **`http://loc
 | `XENDIT_SECRET_KEY` | Your Xendit secret key (test mode while developing) |
 | `XENDIT_CALLBACK_TOKEN` | The verification token Xendit shows you under Settings → Developers → Callbacks. We check every incoming webhook against this. |
 | `JWT_SECRET` | Signs access/refresh tokens |
+| `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `SMTP_FROM` | Optional — sends a notification email on every contact form submission. If left unset, submissions are still stored, just no email goes out (logged instead). |
+| `SUPPORT_NOTIFICATION_EMAIL` | Optional — where contact form notifications are sent. No address, no email (submissions are still stored either way). |
 | `PORT`, `NODE_ENV` | Standard stuff |
 
 `.env` is gitignored — never commit real keys.
@@ -75,6 +77,12 @@ Everything below is prefixed with `/api/v1`. Auth-protected routes need `Authori
 | `POST` | `/topup/checkout` | Start a purchase. Body: `{ product_id, target_user_id, target_zone_id?, affiliate_code? }`. Returns a Xendit invoice URL to pay. |
 | `GET` | `/topup/transactions/:id` | Check a transaction's status (useful after redirecting back from Xendit) |
 
+### Contact (public, no login needed)
+
+| Method | Path | What it does |
+|---|---|---|
+| `POST` | `/contact` | Submit a support/partnership message. Body: `{ name, email, category, message }`. Always stored; also emails `SUPPORT_NOTIFICATION_EMAIL` if SMTP is configured. |
+
 ### Auth
 
 | Method | Path | What it does |
@@ -103,12 +111,14 @@ Everything here needs a superadmin JWT. There's no self-registration for admins 
 | `GET` | `/admin/settings` | View global commission rate + minimum withdrawal amount |
 | `PATCH` | `/admin/settings` | Update them. Body: `{ global_commission_rate?, minimum_withdrawal_amount? }` |
 | `GET` | `/admin/products` | List the full product catalog |
-| `POST` | `/admin/products` | Add a product. Body: `{ name, provider_code, base_price, selling_price }` |
-| `PATCH` | `/admin/products/:id` | Edit a product (price, name, status, etc.) |
+| `POST` | `/admin/products` | Add a product. Body: `{ name, provider_code, base_price, selling_price, coin_amount, bonus_coin?, flag? }` |
+| `PATCH` | `/admin/products/:id` | Edit a product (price, coin amount, bonus, flag, status, etc.) |
 | `GET` | `/admin/withdrawals` | List withdrawal requests. Filter with `?status=pending\|approved\|rejected\|paid\|failed` |
 | `POST` | `/admin/withdrawals/:id/approve` | Approve a withdrawal — this triggers a real Xendit Payout call |
 | `POST` | `/admin/withdrawals/:id/reject` | Decline a withdrawal before it's sent to Xendit (bad bank details, fraud, etc.) — refunds the locked balance |
 | `GET` | `/admin/transactions` | Monitor all transactions, paginated |
+| `GET` | `/admin/contact-messages` | List contact form submissions. Filter with `?status=open\|resolved` |
+| `POST` | `/admin/contact-messages/:id/resolve` | Mark a submission resolved |
 
 ### Webhooks (Xendit calls these — you don't)
 

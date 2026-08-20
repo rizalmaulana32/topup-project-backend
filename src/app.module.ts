@@ -11,6 +11,7 @@ import { AuthModule } from './auth/auth.module';
 import { AffiliatesModule } from './affiliates/affiliates.module';
 import { SettingsModule } from './settings/settings.module';
 import { AdminModule } from './admin/admin.module';
+import { ContactModule } from './contact/contact.module';
 
 @Module({
   imports: [
@@ -38,6 +39,7 @@ import { AdminModule } from './admin/admin.module';
     AffiliatesModule,
     SettingsModule,
     AdminModule,
+    ContactModule,
   ],
   controllers: [AppController],
   providers: [AppService],

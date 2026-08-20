@@ -16,12 +16,14 @@ import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { Roles } from '../auth/roles.decorator';
 import { RolesGuard } from '../auth/roles.guard';
 import { AuthenticatedUser } from '../auth/types/jwt-payload';
+import { ContactService } from '../contact/contact.service';
 import { ProductsService } from '../products/products.service';
 import { SettingsService } from '../settings/settings.service';
 import { TransactionsService } from '../transactions/transactions.service';
 import { UserRole } from '../users/entities/user.entity';
 import { CreateProductDto } from './dto/create-product.dto';
 import { ListAffiliatesDto } from './dto/list-affiliates.dto';
+import { ListContactMessagesDto } from './dto/list-contact-messages.dto';
 import { ListTransactionsDto } from './dto/list-transactions.dto';
 import { ListWithdrawalsDto } from './dto/list-withdrawals.dto';
 import { UpdateCommissionRateDto } from './dto/update-commission-rate.dto';
@@ -39,6 +41,7 @@ export class AdminController {
     private readonly settingsService: SettingsService,
     private readonly productsService: ProductsService,
     private readonly transactionsService: TransactionsService,
+    private readonly contactService: ContactService,
   ) {}
 
   @Get('affiliates')
@@ -265,5 +268,31 @@ export class AdminController {
         offset: query.offset ?? 0,
       },
     };
+  }
+
+  @Get('contact-messages')
+  @ApiOperation({ summary: 'List support/partnership messages' })
+  async listContactMessages(@Query() query: ListContactMessagesDto) {
+    const result = await this.contactService.findAll({
+      status: query.status,
+      limit: query.limit ?? 20,
+      offset: query.offset ?? 0,
+    });
+    return {
+      success: true,
+      data: {
+        items: result.items,
+        total: result.total,
+        limit: query.limit ?? 20,
+        offset: query.offset ?? 0,
+      },
+    };
+  }
+
+  @Post('contact-messages/:id/resolve')
+  @ApiOperation({ summary: 'Mark a support/partnership message resolved' })
+  async resolveContactMessage(@Param('id') id: string) {
+    const message = await this.contactService.markResolved(id);
+    return { success: true, data: message };
   }
 }
