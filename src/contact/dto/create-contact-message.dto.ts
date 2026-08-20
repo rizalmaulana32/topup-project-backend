@@ -10,9 +10,5 @@ export class CreateContactMessageDto {
 
   @IsString()
   @MinLength(1)
-  category: string;
-
-  @IsString()
-  @MinLength(1)
   message: string;
 }

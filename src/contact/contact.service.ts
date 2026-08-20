@@ -30,7 +30,6 @@ export class ContactService {
     const message = this.contactMessageRepository.create({
       name: dto.name,
       email: dto.email,
-      category: dto.category,
       message: dto.message,
       status: ContactMessageStatus.OPEN,
     });
@@ -42,8 +41,8 @@ export class ContactService {
     if (notifyTo) {
       await this.emailService.send({
         to: notifyTo,
-        subject: `Pesan Baru dari ${dto.name} - ${dto.category}`,
-        text: `Nama: ${dto.name}\nEmail: ${dto.email}\nKategori: ${dto.category}\n\nPesan:\n${dto.message}`,
+        subject: `Pesan Baru dari ${dto.name}`,
+        text: `Nama: ${dto.name}\nEmail: ${dto.email}\n\nPesan:\n${dto.message}`,
       });
     } else {
       this.logger.warn(

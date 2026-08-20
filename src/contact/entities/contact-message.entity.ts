@@ -21,9 +21,6 @@ export class ContactMessage {
   @Column()
   email: string;
 
-  @Column()
-  category: string;
-
   @Column({ type: 'text' })
   message: string;
 

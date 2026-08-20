@@ -85,7 +85,6 @@ describe('Contact (e2e)', () => {
       .send({
         name: 'Ricky Oktavio',
         email: 'ricky@example.com',
-        category: 'Kendala Top-Up / Pembayaran',
         message: 'Pembayaran saya belum masuk ke akun',
       })
       .expect(201);
@@ -110,7 +109,6 @@ describe('Contact (e2e)', () => {
       .send({
         name: 'Ricky Oktavio',
         email: 'ricky@example.com',
-        category: 'Kendala Top-Up / Pembayaran',
       })
       .expect(400);
   });
@@ -127,7 +125,6 @@ describe('Contact (e2e)', () => {
       .send({
         name: 'Ana Partner',
         email: 'ana@example.com',
-        category: 'Kemitraan',
         message: 'Saya ingin jadi reseller',
       })
       .expect(201);

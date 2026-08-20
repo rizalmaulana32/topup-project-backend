@@ -43,7 +43,6 @@ describe('ContactService', () => {
     const dto = {
       name: 'Ricky Oktavio',
       email: 'ricky@example.com',
-      category: 'Kendala Top-Up / Pembayaran',
       message: 'Pembayaran saya belum masuk',
     };
 

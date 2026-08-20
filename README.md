@@ -81,7 +81,7 @@ Everything below is prefixed with `/api/v1`. Auth-protected routes need `Authori
 
 | Method | Path | What it does |
 |---|---|---|
-| `POST` | `/contact` | Submit a support/partnership message. Body: `{ name, email, category, message }`. Always stored; also emails `SUPPORT_NOTIFICATION_EMAIL` if SMTP is configured. |
+| `POST` | `/contact` | Submit a support/partnership message. Body: `{ name, email, message }`. Always stored; also emails `SUPPORT_NOTIFICATION_EMAIL` if SMTP is configured. |
 
 ### Auth
 
