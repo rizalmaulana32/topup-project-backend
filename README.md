@@ -113,12 +113,14 @@ Everything here needs a superadmin JWT. There's no self-registration for admins 
 | `GET` | `/admin/products` | List the full product catalog |
 | `POST` | `/admin/products` | Add a product. Body: `{ name, provider_code, base_price, selling_price, coin_amount, bonus_coin?, flag? }` |
 | `PATCH` | `/admin/products/:id` | Edit a product (price, coin amount, bonus, flag, status, etc.) |
+| `DELETE` | `/admin/products/:id` | Soft-delete a product — hidden from every listing, row stays in the database so past transactions still resolve |
 | `GET` | `/admin/withdrawals` | List withdrawal requests. Filter with `?status=pending\|approved\|rejected\|paid\|failed` |
 | `POST` | `/admin/withdrawals/:id/approve` | Approve a withdrawal — this triggers a real Xendit Payout call |
 | `POST` | `/admin/withdrawals/:id/reject` | Decline a withdrawal before it's sent to Xendit (bad bank details, fraud, etc.) — refunds the locked balance |
 | `GET` | `/admin/transactions` | Monitor all transactions, paginated |
 | `GET` | `/admin/contact-messages` | List contact form submissions. Filter with `?status=open\|resolved` |
 | `POST` | `/admin/contact-messages/:id/resolve` | Mark a submission resolved |
+| `DELETE` | `/admin/contact-messages/:id` | Soft-delete a submission — hidden from listings, row stays in the database |
 
 ### Webhooks (Xendit calls these — you don't)
 
