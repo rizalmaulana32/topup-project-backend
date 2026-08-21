@@ -286,6 +286,58 @@ describe('Admin (e2e)', () => {
     await productRepository.delete(createBody.data.id);
   });
 
+  it('soft-deletes a product, hiding it from listings without removing the row', async () => {
+    const createResponse = await request(app.getHttpServer())
+      .post('/api/v1/admin/products')
+      .set('Authorization', `Bearer ${superadminToken}`)
+      .send({
+        name: 'To Be Deleted',
+        provider_code: 'ml_delete_me',
+        base_price: 1000,
+        selling_price: 1500,
+        coin_amount: 100,
+      })
+      .expect(201);
+    const createBody = createResponse.body as { data: { id: string } };
+    const productId = createBody.data.id;
+
+    await request(app.getHttpServer())
+      .delete(`/api/v1/admin/products/${productId}`)
+      .set('Authorization', `Bearer ${superadminToken}`)
+      .expect(200)
+      .expect({ success: true });
+
+    const adminListResponse = await request(app.getHttpServer())
+      .get('/api/v1/admin/products')
+      .set('Authorization', `Bearer ${superadminToken}`)
+      .expect(200);
+    const adminListBody = adminListResponse.body as { data: { id: string }[] };
+    expect(adminListBody.data.some((p) => p.id === productId)).toBe(false);
+
+    const publicListResponse = await request(app.getHttpServer())
+      .get('/api/v1/topup/products')
+      .expect(200);
+    const publicListBody = publicListResponse.body as {
+      data: { id: string }[];
+    };
+    expect(publicListBody.data.some((p) => p.id === productId)).toBe(false);
+
+    const rawRow = await productRepository
+      .createQueryBuilder('product')
+      .withDeleted()
+      .where('product.id = :id', { id: productId })
+      .getOne();
+    expect(rawRow).not.toBeNull();
+    expect(rawRow?.deletedAt).not.toBeNull();
+  });
+
+  it('returns 404 when soft-deleting an unknown product', async () => {
+    await request(app.getHttpServer())
+      .delete('/api/v1/admin/products/999999')
+      .set('Authorization', `Bearer ${superadminToken}`)
+      .expect(404);
+  });
+
   it('lists transactions for monitoring', async () => {
     const response = await request(app.getHttpServer())
       .get('/api/v1/admin/transactions?limit=5&offset=0')

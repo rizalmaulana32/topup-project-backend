@@ -169,4 +169,45 @@ describe('Contact (e2e)', () => {
       .set('Authorization', `Bearer ${superadminToken}`)
       .expect(404);
   });
+
+  it('soft-deletes a contact message, hiding it from listings without removing the row', async () => {
+    const submitResponse = await request(app.getHttpServer())
+      .post('/api/v1/contact')
+      .send({
+        name: 'To Be Deleted',
+        email: 'delete-me@example.com',
+        message: 'This should disappear from listings',
+      })
+      .expect(201);
+    const submitBody = submitResponse.body as { data: { id: string } };
+    const messageId = submitBody.data.id;
+
+    await request(app.getHttpServer())
+      .delete(`/api/v1/admin/contact-messages/${messageId}`)
+      .set('Authorization', `Bearer ${superadminToken}`)
+      .expect(200)
+      .expect({ success: true });
+
+    const listResponse = await request(app.getHttpServer())
+      .get('/api/v1/admin/contact-messages')
+      .set('Authorization', `Bearer ${superadminToken}`)
+      .expect(200);
+    const listBody = listResponse.body as { data: { items: { id: string }[] } };
+    expect(listBody.data.items.some((m) => m.id === messageId)).toBe(false);
+
+    const rawRow = await contactMessageRepository
+      .createQueryBuilder('message')
+      .withDeleted()
+      .where('message.id = :id', { id: messageId })
+      .getOne();
+    expect(rawRow).not.toBeNull();
+    expect(rawRow?.deletedAt).not.toBeNull();
+  });
+
+  it('returns 404 when soft-deleting an unknown contact message', async () => {
+    await request(app.getHttpServer())
+      .delete('/api/v1/admin/contact-messages/999999')
+      .set('Authorization', `Bearer ${superadminToken}`)
+      .expect(404);
+  });
 });

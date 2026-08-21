@@ -8,6 +8,7 @@ describe('ProductsService', () => {
   let findMock: jest.Mock;
   let createMock: jest.Mock;
   let saveMock: jest.Mock;
+  let softDeleteMock: jest.Mock;
   let service: ProductsService;
 
   beforeEach(() => {
@@ -15,12 +16,14 @@ describe('ProductsService', () => {
     findMock = jest.fn();
     createMock = jest.fn();
     saveMock = jest.fn();
+    softDeleteMock = jest.fn();
 
     const repository = {
       findOne: findOneMock,
       find: findMock,
       create: createMock,
       save: saveMock,
+      softDelete: softDeleteMock,
     } as unknown as Repository<Product>;
 
     service = new ProductsService(repository);
@@ -110,6 +113,25 @@ describe('ProductsService', () => {
           status: ProductStatus.INACTIVE,
         }),
       );
+    });
+  });
+
+  describe('softDelete', () => {
+    it('soft-deletes an existing product', async () => {
+      findOneMock.mockResolvedValue({ id: '1' });
+
+      await service.softDelete('1');
+
+      expect(softDeleteMock).toHaveBeenCalledWith('1');
+    });
+
+    it('throws NotFoundException instead of deleting when the product does not exist', async () => {
+      findOneMock.mockResolvedValue(null);
+
+      await expect(service.softDelete('missing')).rejects.toBeInstanceOf(
+        NotFoundException,
+      );
+      expect(softDeleteMock).not.toHaveBeenCalled();
     });
   });
 });

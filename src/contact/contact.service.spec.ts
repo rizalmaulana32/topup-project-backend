@@ -13,6 +13,7 @@ describe('ContactService', () => {
   let saveMock: jest.Mock;
   let findOneMock: jest.Mock;
   let findAndCountMock: jest.Mock;
+  let softDeleteMock: jest.Mock;
   let sendMock: jest.Mock;
   let configGetMock: jest.Mock;
   let service: ContactService;
@@ -22,6 +23,7 @@ describe('ContactService', () => {
     saveMock = jest.fn();
     findOneMock = jest.fn();
     findAndCountMock = jest.fn();
+    softDeleteMock = jest.fn();
     sendMock = jest.fn().mockResolvedValue(undefined);
     configGetMock = jest.fn();
 
@@ -30,6 +32,7 @@ describe('ContactService', () => {
       save: saveMock,
       findOne: findOneMock,
       findAndCount: findAndCountMock,
+      softDelete: softDeleteMock,
     } as unknown as Repository<ContactMessage>;
     const emailService = { send: sendMock } as unknown as EmailService;
     const configService = {
@@ -95,6 +98,25 @@ describe('ContactService', () => {
       await expect(service.markResolved('missing')).rejects.toBeInstanceOf(
         NotFoundException,
       );
+    });
+  });
+
+  describe('softDelete', () => {
+    it('soft-deletes an existing message', async () => {
+      findOneMock.mockResolvedValue({ id: '1' });
+
+      await service.softDelete('1');
+
+      expect(softDeleteMock).toHaveBeenCalledWith('1');
+    });
+
+    it('throws NotFoundException instead of deleting when the message does not exist', async () => {
+      findOneMock.mockResolvedValue(null);
+
+      await expect(service.softDelete('missing')).rejects.toBeInstanceOf(
+        NotFoundException,
+      );
+      expect(softDeleteMock).not.toHaveBeenCalled();
     });
   });
 

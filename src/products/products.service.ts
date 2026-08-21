@@ -94,4 +94,16 @@ export class ProductsService {
 
     return this.productRepository.save(product);
   }
+
+  /**
+   * Soft delete: sets deleted_at instead of removing the row, so past
+   * transactions that reference this product (product_id FK) keep working.
+   * TypeORM automatically excludes soft-deleted rows from find/findOne, so
+   * a deleted product disappears from every listing without further code
+   * changes here.
+   */
+  async softDelete(id: string): Promise<void> {
+    await this.findByIdOrFail(id);
+    await this.productRepository.softDelete(id);
+  }
 }

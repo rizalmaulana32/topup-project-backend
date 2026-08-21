@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   Patch,
@@ -189,6 +190,16 @@ export class AdminController {
     return { success: true, data: product };
   }
 
+  @Delete('products/:id')
+  @ApiOperation({
+    summary:
+      'Soft-delete a product (hidden from listings, not removed from the database)',
+  })
+  async deleteProduct(@Param('id') id: string) {
+    await this.productsService.softDelete(id);
+    return { success: true };
+  }
+
   @Get('withdrawals')
   @ApiOperation({ summary: 'List commission withdrawal requests' })
   async listWithdrawals(@Query() query: ListWithdrawalsDto) {
@@ -294,5 +305,15 @@ export class AdminController {
   async resolveContactMessage(@Param('id') id: string) {
     const message = await this.contactService.markResolved(id);
     return { success: true, data: message };
+  }
+
+  @Delete('contact-messages/:id')
+  @ApiOperation({
+    summary:
+      'Soft-delete a contact message (hidden from listings, not removed from the database)',
+  })
+  async deleteContactMessage(@Param('id') id: string) {
+    await this.contactService.softDelete(id);
+    return { success: true };
   }
 }

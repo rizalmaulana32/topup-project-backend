@@ -66,13 +66,29 @@ export class ContactService {
   }
 
   async markResolved(id: string): Promise<ContactMessage> {
+    const found = await this.findByIdOrFail(id);
+    found.status = ContactMessageStatus.RESOLVED;
+    return this.contactMessageRepository.save(found);
+  }
+
+  /**
+   * Soft delete: sets deleted_at instead of removing the row. TypeORM
+   * automatically excludes soft-deleted rows from find/findOne, so a
+   * deleted message disappears from the admin listing without further
+   * code changes here.
+   */
+  async softDelete(id: string): Promise<void> {
+    await this.findByIdOrFail(id);
+    await this.contactMessageRepository.softDelete(id);
+  }
+
+  private async findByIdOrFail(id: string): Promise<ContactMessage> {
     const found = await this.contactMessageRepository.findOne({
       where: { id },
     });
     if (!found) {
       throw new NotFoundException(`Contact message ${id} not found`);
     }
-    found.status = ContactMessageStatus.RESOLVED;
-    return this.contactMessageRepository.save(found);
+    return found;
   }
 }
