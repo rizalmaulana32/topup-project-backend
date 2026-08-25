@@ -3,7 +3,7 @@
 ## Metadata
 - target_project: `backend`
 - created_at: `2026-08-05T00:00:00+07:00`
-- updated_at: `2026-08-19T00:00:00+07:00`
+- updated_at: `2026-08-25T00:00:00+07:00`
 - updated_by: `claude`
 - status: `active`
 - git_branch: `main`
@@ -11,7 +11,7 @@
 
 ## Current Position
 - active_feature: `topup-affiliate-platform`
-- active_slice: `superadmin endpoints, commission crediting, Xendit Disbursement withdrawal — all implemented and verified`
+- active_slice: `payment gateway migrated from Xendit to Duitku (client's decision) — code complete and locally tested, not yet deployed or verified against a real Duitku account (none exists yet)`
 - current_status: `All five bootstrap slices complete: customer top-up purchase, affiliate registration/dashboard, superadmin admin panel, commission crediting, and withdrawal payout. Build/lint/41 unit/27 e2e all green.`
 - current_gate: `G5`
 - resume_safe: `yes`
@@ -43,6 +43,7 @@
 - `WithdrawalStatus adds "failed" beyond the source ERD's 4 values (pending/approved/rejected/paid), to distinguish admin-rejected from Xendit-failed` — recorded in DECISION_LOG.md 2026-08-10
 - `Xendit Payout channelCode derived as ID_<BANK_NAME uppercased> from the affiliate's free-text bank_name — verified 2026-08-10 against the real getPayoutChannels API using the founder's existing Xendit key (BCA, BNI, Mandiri, BRI, CIMB, Permata all matched exactly)` — recorded in DECISION_LOG.md 2026-08-10
 - `TRANSACTIONS.affiliator_id from the source ERD is still not a real FK — commission crediting resolves the referralCode string to an AffiliatorProfile at credit time instead.`
+- `Payment gateway/payout provider switched from Xendit to Duitku (client decision, 2026-08-25), superseding the 2026-08-05 decision above. src/xendit/ deleted, src/duitku/ added. Columns renamed via migration (data-preserving RENAME COLUMN, not drop+recreate): transactions.xendit_invoice_id -> duitku_reference, commission_withdrawals.xendit_disbursement_id -> duitku_disbursement_id.`
 
 ## Current Scope
 - allowed_write_paths:
@@ -52,10 +53,12 @@
   - any Vue.js/frontend code
 - not yet built:
   - `Real Provider Top-Up vendor integration`
-  - `Real Xendit Payout call with live/test credentials (only mocked in e2e so far)`
+  - `Any real Duitku account/credentials at all — client said "not yet, need to sign up first"; the whole Duitku integration (payment + disbursement) is built and locally tested but has never made a real API call`
+  - `Duitku bank-code mapping for disbursement (deliberately throws instead of guessing — see DuitkuService)`
   - `Frontend of any kind`
 
 ## Latest Work Summary
+- `Client requested switching payment gateway from Xendit to Duitku (https://www.duitku.com/). Researched Duitku's real API first rather than guess (their docs site blocks automated fetches, worked around via a read-only proxy + their official Laravel/npm libraries): payment collection maps to "Duitku Pop" createInvoice (hosted checkout page, same UX as Xendit Invoice), disbursement exists but requires account activation and uses a materially different two-step-ish flow with its own signature scheme and bank-code list. Asked the founder two clarifying questions before writing code: credentials status (answer: none yet, need to sign up) and disbursement scope (answer: migrate both payment and disbursement). Built the full swap: new DuitkuService (createInvoice, createPayout, verifyInvoiceCallbackSignature, verifyDisbursementCallbackSignature - HMAC/SHA256 based, form-urlencoded callback body, replacing Xendit's simple static-token header check), deleted src/xendit/, rewrote both webhook controllers, rewired topup.service.ts and affiliates.service.ts, renamed transactions.xendit_invoice_id -> duitku_reference and commission_withdrawals.xendit_disbursement_id -> duitku_disbursement_id via a genuine data-preserving RENAME COLUMN migration (verified TypeORM generated a true rename, not a destructive drop+recreate, before running it - this matters since production has real data in these columns). Updated every test file with a FakeDuitkuService double. Deliberately left two things unresolved rather than guess at real money handling: (1) Duitku's invoice callback has no explicit "expired" push the way Xendit's did (only definitive success/failure), so handleInvoiceExpired now has no live trigger - documented, not silently dropped; (2) Duitku's disbursement needs a real bank-name -> Duitku-bank-code lookup that doesn't exist yet (unlike Xendit's derivable ID_<BANK> convention) - DuitkuService.createPayout deliberately throws a clear error instead of guessing. Build/lint/63 unit/44 e2e all pass locally. NOT deployed to the server - no real Duitku account exists yet, and deploying now would replace live, working Xendit checkout with a non-functional integration; holding for the founder's explicit go-ahead on timing.`
 - `Founder asked whether a DELETE API existed anywhere - it didn't (grepped the whole src tree, confirmed zero @Delete decorators), by original design (PRD/use-case only ever describe add/edit/status-toggle, nothing removable). Founder asked for soft delete specifically. Added @DeleteDateColumn (deleted_at) to Product and ContactMessage, ProductsService.softDelete/ContactService.softDelete (repository.softDelete after a not-found check), and DELETE /admin/products/:id + DELETE /admin/contact-messages/:id. TypeORM automatically excludes soft-deleted rows from find/findOne, so deleted items vanish from every listing (including the public GET /topup/products) without touching any query code. Soft delete over hard delete specifically protects transactions.product_id FK integrity - a deleted product's past orders keep working. Migration AddSoftDelete1787284338860 (two nullable deleted_at columns). 4 new unit tests + 4 new e2e tests; build/lint/61 unit/45 e2e all pass. Deployed and live-verified with throwaway product/message (ids 37 and 3) - both correctly vanished from admin listings after DELETE, confirmed still present with deleted_at set via a withDeleted() query.`
 - `While verifying the deploy, GET /topup/products came back empty (0 of the real 25 products) - investigated via nginx access logs before touching anything, rather than assume a bug in the new code. Found 25 individual PATCH /admin/products/:id requests, one per product, all 200s, all with Referer: https://yaytopup.my.id/ (the real live frontend, not Swagger, not any script run this session) at 2026-08-21 05:53-05:55 (UTC+2) - someone on the founder's team deactivated the entire catalog via the live admin panel. Asked the founder directly rather than "fixing" it; confirmed intentional, left as-is. Worth remembering: an empty public product listing is not necessarily a bug - check nginx access logs for admin-panel activity before assuming regression.`
 - `Founder caught that the contact form's category field was still in the request body/Swagger schema after asking it be skipped - the earlier "skip the dropdown" answer had been read as "make it free text" rather than "drop it entirely." Removed category from the entity, DTO, and service (email subject/body no longer references it), migration RemoveContactMessageCategory1787196756302 drops the column. Live-verified on staging: Swagger schema no longer lists category, POST /contact with a category field now 400s (forbidNonWhitelisted), and omitting it works fine.`
@@ -77,8 +80,8 @@
 - `Verified against a real local Postgres: build, lint (0 errors, 6 pre-existing accepted warnings), 41 unit tests, and 27 e2e tests (admin auth/guards, affiliate approve/reject, settings, product CRUD, transaction monitoring, full commission-credit-then-withdraw-then-payout-then-callback lifecycle including a failed-payout refund path) all pass.`
 
 ## QA Status
-- unit: `pass (61/61, npm test)`
-- integration: `pass (45/45 e2e via npm run test:e2e --runInBand, real Postgres, Xendit mocked for Invoice+Payout — now runs against a real migrated schema, not synchronize:true)`
+- unit: `pass (63/63, npm test)`
+- integration: `pass (44/44 e2e via npm run test:e2e --runInBand, real Postgres, Duitku mocked via FakeDuitkuService for invoice+disbursement — runs against a real migrated schema, not synchronize:true. One fewer test than before (45->44): the "EXPIRED via webhook" case was removed since Duitku's callback has no equivalent signal.)`
 - e2e_browser: `not_required (no frontend in scope)`
 - ui_visual: `not_required (no frontend in scope)`
 - manual_visual_qa_required: `no`
@@ -89,15 +92,16 @@
 - regression: `pass — all prior-slice tests (topup, affiliate) still pass alongside the new admin/commission/withdrawal tests`
 
 ## Blockers
-- `None for any implemented endpoint.`
-- `Xendit invoice callback (PAID/SETTLED/EXPIRED) is now real-verified end-to-end on staging, not just mocked in e2e — see 2026-08-19 entries above.`
-- `No real Xendit Payout (disbursement) has ever been executed (only getPayoutChannels was called, read-only, to verify the channel-code convention) — an actual disbursement would need a real approved withdrawal walked through POST /admin/withdrawals/:id/approve on staging.`
+- `None for any implemented endpoint against its current (Duitku) provider assumptions.`
+- `The whole Duitku integration is unverified against a real account — no credentials exist yet. The Xendit integration it replaced WAS real-verified end-to-end on staging (real paid invoice, real webhook) before the switch; that history is preserved in artifacts/access/README.md but the code itself is gone.`
+- `Duitku disbursement cannot function at all yet — DuitkuService.createPayout throws deliberately, since there's no real bank-name -> Duitku-bank-code mapping (Duitku doesn't use Xendit's derivable ID_<BANK> convention).`
 - `Real Provider Top-Up vendor still undecided — mock service in use.`
 
 ## Next Exact Step
-- `All five originally-scoped slices are complete, and the real Xendit invoice payment loop is verified end-to-end. Await founder direction: a real Xendit Payout (disbursement) test, real Provider Top-Up vendor selection, frontend work, migrations, or a new feature area.`
+- `Code side of the Xendit->Duitku migration is done and committed locally (not deployed). Awaiting: (1) founder to actually create a Duitku merchant account and hand over real sandbox credentials, (2) founder's go-ahead on WHEN to deploy this to the staging server, since doing so replaces currently-working live Xendit checkout with a Duitku integration that has never made a real API call. Once credentials exist: verify createInvoice/callback signature/createPayout field-for-field against the real Duitku dashboard docs (this was built from a proxy-scraped mirror of their docs, not the primary source), source a real bank-code list for disbursement, then redeploy the same way past changes have been (scp changed files, npm run build, migration:run, pm2 restart) and live-test one real payment the same way the original Xendit integration was verified.`
 
 ## Do Not Repeat
+- `When a column rename is needed on a table that already has real production data (e.g. swapping payment providers and renaming xendit_invoice_id -> duitku_reference), always read the generated migration file before running it against anything real. TypeORM's diff-based migration:generate CAN produce a true ALTER TABLE ... RENAME COLUMN (data-preserving, confirmed this time), but a diff-based generator can in principle see "old column gone, new column added" and emit a destructive drop+recreate instead depending on how the diff resolves - never assume, always check the actual SQL in the generated file first.`
 - `When manually creating a table that TypeORM's app-level DB role needs to see/manage (e.g. the migrations tracking table, adopted onto an already-synchronize'd staging DB), create it via psql as that same app role — not as the postgres superuser. A table owned by a different role may not show up in that role's information_schema.tables query, causing TypeORM to think it doesn't exist and attempt to recreate it (fails with "already exists"). Fix if it happens: ALTER TABLE <name> OWNER TO <app_role>.`
 - `Do not insert values containing $ (e.g. a bcrypt hash like $2b$10$...) via a raw psql -c command run through nested shell layers (local bash -> ssh -> remote bash -> psql -c) — each layer's escaping can corrupt the $-prefixed segments silently (the insert succeeds, but with mangled data, so it fails only on later use, e.g. login). Write a small Node/script file instead and scp+run it, using a parameterized query so the value never passes through shell interpolation at all.`
 - `Do not declare a TypeORM @Column with a TS union type (e.g. string | null) without an explicit type: option — reflect-metadata resolves the design type to Object for unions, which TypeORM rejects for Postgres (hit this on Transaction.targetZoneId/referralCode/xenditInvoiceId, fixed by adding type: 'varchar').`

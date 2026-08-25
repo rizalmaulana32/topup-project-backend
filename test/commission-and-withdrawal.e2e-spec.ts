@@ -21,36 +21,44 @@ import {
 } from '../src/products/entities/product.entity';
 import { Transaction } from '../src/transactions/entities/transaction.entity';
 import { User, UserRole, UserStatus } from '../src/users/entities/user.entity';
-import { XenditService } from '../src/xendit/xendit.service';
+import { DuitkuService } from '../src/duitku/duitku.service';
 
 /**
  * Exercises the full referred-purchase -> commission-credit -> withdrawal
- * -> Xendit Disbursement lifecycle against a real Postgres database.
- * XenditService is overridden with a deterministic double for both Invoice
- * and Payout calls (no real Xendit test-mode credentials assumed here);
- * see topup.e2e-spec.ts for the live-checkout-only override and
+ * -> Duitku Disbursement lifecycle against a real Postgres database.
+ * DuitkuService is overridden with a deterministic double for both Invoice
+ * and Disbursement calls (no real Duitku credentials assumed here); see
+ * topup.e2e-spec.ts for the live-checkout-only override and
  * admin.e2e-spec.ts for the affiliate approval flow this test builds on.
  */
-const TEST_CALLBACK_TOKEN = 'e2e-test-callback-token';
+const TEST_SIGNATURE = 'e2e-test-signature';
 
-class FakeXenditService {
+class FakeDuitkuService {
   createInvoice(params: { externalId: string }) {
     return Promise.resolve({
-      invoiceId: `fake-invoice-${params.externalId}`,
-      invoiceUrl: `https://checkout.xendit.co/web/fake-invoice-${params.externalId}`,
-      status: 'PENDING',
+      invoiceId: `fake-reference-${params.externalId}`,
+      invoiceUrl: `https://app-sandbox.duitku.com/checkout/fake-reference-${params.externalId}`,
+      status: '00',
     });
   }
 
   createPayout(params: { referenceId: string }) {
     return Promise.resolve({
       payoutId: `fake-payout-${params.referenceId}`,
-      status: 'ACCEPTED',
+      status: '00',
     });
   }
 
-  verifyCallbackToken(receivedToken: string | undefined): boolean {
-    return receivedToken === TEST_CALLBACK_TOKEN;
+  verifyInvoiceCallbackSignature(params: {
+    signature: string | undefined;
+  }): boolean {
+    return params.signature === TEST_SIGNATURE;
+  }
+
+  verifyDisbursementCallbackSignature(params: {
+    signature: string | undefined;
+  }): boolean {
+    return params.signature === TEST_SIGNATURE;
   }
 }
 
@@ -82,8 +90,8 @@ describe('Commission crediting and withdrawal (e2e)', () => {
     const moduleFixture: TestingModule = await Test.createTestingModule({
       imports: [AppModule],
     })
-      .overrideProvider(XenditService)
-      .useClass(FakeXenditService)
+      .overrideProvider(DuitkuService)
+      .useClass(FakeDuitkuService)
       .compile();
 
     app = moduleFixture.createNestApplication();
@@ -198,9 +206,14 @@ describe('Commission crediting and withdrawal (e2e)', () => {
     const transactionId = checkoutBody.data.transaction_id;
 
     await request(app.getHttpServer())
-      .post('/api/v1/webhooks/xendit/invoice')
-      .set('x-callback-token', TEST_CALLBACK_TOKEN)
-      .send({ external_id: transactionId, status: 'PAID' })
+      .post('/api/v1/webhooks/duitku/invoice')
+      .type('form')
+      .send({
+        merchantOrderId: transactionId,
+        amount: '2000000',
+        resultCode: '00',
+        signature: TEST_SIGNATURE,
+      })
       .expect(200);
 
     const transaction = await transactionRepository.findOneOrFail({
@@ -256,7 +269,7 @@ describe('Commission crediting and withdrawal (e2e)', () => {
       .expect(400);
   });
 
-  it('completes a withdrawal via admin approval and a SUCCEEDED Xendit callback', async () => {
+  it('completes a withdrawal via admin approval and a successful Duitku callback', async () => {
     const pending = await withdrawalRepository.findOneOrFail({
       where: {
         affiliatorId: affiliateProfileId,
@@ -269,17 +282,22 @@ describe('Commission crediting and withdrawal (e2e)', () => {
       .set('Authorization', `Bearer ${superadminToken}`)
       .expect(201);
     const approveBody = approveResponse.body as {
-      data: { status: string; xendit_disbursement_id: string };
+      data: { status: string; duitku_disbursement_id: string };
     };
     expect(approveBody.data.status).toBe(WithdrawalStatus.APPROVED);
-    expect(approveBody.data.xendit_disbursement_id).toBe(
+    expect(approveBody.data.duitku_disbursement_id).toBe(
       `fake-payout-${pending.id}`,
     );
 
     await request(app.getHttpServer())
-      .post('/api/v1/webhooks/xendit/disbursement')
-      .set('x-callback-token', TEST_CALLBACK_TOKEN)
-      .send({ reference_id: pending.id, status: 'SUCCEEDED' })
+      .post('/api/v1/webhooks/duitku/disbursement')
+      .type('form')
+      .send({
+        custRefNumber: pending.id,
+        amount: '100000',
+        statusCode: '00',
+        signature: TEST_SIGNATURE,
+      })
       .expect(200);
 
     const paid = await withdrawalRepository.findOneOrFail({
@@ -288,7 +306,7 @@ describe('Commission crediting and withdrawal (e2e)', () => {
     expect(paid.status).toBe(WithdrawalStatus.PAID);
 
     // Balance stays at 100000 — the debit was already recorded at request
-    // time; a SUCCEEDED callback does not touch the balance further.
+    // time; a success callback does not touch the balance further.
     const profile = await profileRepository.findOneOrFail({
       where: { id: affiliateProfileId },
     });
@@ -339,9 +357,14 @@ describe('Commission crediting and withdrawal (e2e)', () => {
       .expect(201);
 
     await request(app.getHttpServer())
-      .post('/api/v1/webhooks/xendit/disbursement')
-      .set('x-callback-token', TEST_CALLBACK_TOKEN)
-      .send({ reference_id: withdrawalId, status: 'FAILED' })
+      .post('/api/v1/webhooks/duitku/disbursement')
+      .type('form')
+      .send({
+        custRefNumber: withdrawalId,
+        amount: '50000',
+        statusCode: '01',
+        signature: TEST_SIGNATURE,
+      })
       .expect(200);
 
     const failed = await withdrawalRepository.findOneOrFail({
@@ -365,7 +388,7 @@ describe('Commission crediting and withdrawal (e2e)', () => {
     expect(refundLog?.amount).toBe('50000.00');
   });
 
-  it('rejects a withdrawal request and refunds the balance without contacting Xendit', async () => {
+  it('rejects a withdrawal request and refunds the balance without contacting Duitku', async () => {
     const requestResponse = await request(app.getHttpServer())
       .post('/api/v1/affiliate/withdraw')
       .set('Authorization', `Bearer ${affiliateToken}`)
@@ -392,7 +415,7 @@ describe('Commission crediting and withdrawal (e2e)', () => {
       where: { id: withdrawalId },
     });
     expect(rejected.status).toBe(WithdrawalStatus.REJECTED);
-    expect(rejected.xenditDisbursementId).toBeNull();
+    expect(rejected.duitkuDisbursementId).toBeNull();
 
     const refundedProfile = await profileRepository.findOneOrFail({
       where: { id: affiliateProfileId },
@@ -422,11 +445,16 @@ describe('Commission crediting and withdrawal (e2e)', () => {
       .expect(409);
   });
 
-  it('rejects a disbursement webhook with an invalid token', async () => {
+  it('rejects a disbursement webhook with an invalid signature', async () => {
     await request(app.getHttpServer())
-      .post('/api/v1/webhooks/xendit/disbursement')
-      .set('x-callback-token', 'wrong-token')
-      .send({ reference_id: 'WDW-doesnotmatter', status: 'SUCCEEDED' })
+      .post('/api/v1/webhooks/duitku/disbursement')
+      .type('form')
+      .send({
+        custRefNumber: 'WDW-doesnotmatter',
+        amount: '1000',
+        statusCode: '00',
+        signature: 'wrong-signature',
+      })
       .expect(401);
   });
 });

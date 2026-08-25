@@ -18,7 +18,7 @@ import { Transaction } from '../transactions/entities/transaction.entity';
 import { TransactionsService } from '../transactions/transactions.service';
 import { User, UserRole, UserStatus } from '../users/entities/user.entity';
 import { UsersService } from '../users/users.service';
-import { XenditService } from '../xendit/xendit.service';
+import { DuitkuService } from '../duitku/duitku.service';
 import { RegisterAffiliateDto } from './dto/register-affiliate.dto';
 import { AffiliatorProfile } from './entities/affiliator-profile.entity';
 import {
@@ -49,7 +49,7 @@ export class AffiliatesService {
     private readonly usersService: UsersService,
     private readonly transactionsService: TransactionsService,
     private readonly settingsService: SettingsService,
-    private readonly xenditService: XenditService,
+    private readonly duitkuService: DuitkuService,
   ) {}
 
   async register(dto: RegisterAffiliateDto) {
@@ -260,10 +260,9 @@ export class AffiliatesService {
   /**
    * Locks the requested amount immediately (balance -= amount) and records
    * the debit ledger entry at this point, matching the source document's
-   * "Kunci Nominal Saldo" step. A later Xendit FAILED/CANCELLED/REVERSED
-   * callback refunds the balance with a corrective credit entry; a
-   * SUCCEEDED callback needs no further ledger entry since the debit is
-   * already accurate.
+   * "Kunci Nominal Saldo" step. A later Duitku failure callback refunds
+   * the balance with a corrective credit entry; a success callback needs
+   * no further ledger entry since the debit is already accurate.
    */
   async requestWithdrawal(
     userId: string,
@@ -370,7 +369,7 @@ export class AffiliatesService {
       );
     }
 
-    const payout = await this.xenditService.createPayout({
+    const payout = await this.duitkuService.createPayout({
       referenceId: withdrawal.id,
       amount: Number(withdrawal.amount),
       bankName: withdrawal.bankName,
@@ -380,7 +379,7 @@ export class AffiliatesService {
     });
 
     withdrawal.status = WithdrawalStatus.APPROVED;
-    withdrawal.xenditDisbursementId = payout.payoutId;
+    withdrawal.duitkuDisbursementId = payout.payoutId;
     withdrawal.processedBy = adminUserId;
     withdrawal.processedAt = new Date();
 
@@ -388,9 +387,9 @@ export class AffiliatesService {
   }
 
   /**
-   * Declines a withdrawal before it's ever sent to Xendit (e.g. bad bank
+   * Declines a withdrawal before it's ever sent to Duitku (e.g. bad bank
    * details, suspected fraud) and refunds the locked balance. Distinct from
-   * a Xendit-side FAILED, which happens after approval.
+   * a Duitku-side failure, which happens after approval.
    */
   async rejectWithdrawal(
     withdrawalId: string,
@@ -453,13 +452,19 @@ export class AffiliatesService {
   }
 
   /**
-   * Called by the Xendit disbursement callback controller after the
-   * x-callback-token has already been verified. Idempotent: a withdrawal
-   * not in `approved` status is ignored (already handled or never sent).
+   * Called by the Duitku disbursement callback controller after the
+   * signature has already been verified. Idempotent: a withdrawal not in
+   * `approved` status is ignored (already handled or never sent).
+   *
+   * Duitku disbursement statusCode: '00' = success, '01' = failed, other
+   * codes (e.g. '68' = still processing) are treated as non-final and
+   * ignored rather than refunded - only a confirmed failure should unlock
+   * the balance. This mapping is a best-effort default pending
+   * confirmation against a real Duitku account (see DuitkuService).
    */
   async handleDisbursementCallback(
     referenceId: string,
-    xenditStatus: string,
+    duitkuStatusCode: string,
   ): Promise<void> {
     const withdrawal = await this.withdrawalRepository.findOne({
       where: { id: referenceId },
@@ -467,7 +472,7 @@ export class AffiliatesService {
 
     if (!withdrawal) {
       this.logger.warn(
-        `Xendit disbursement callback for unknown withdrawal ${referenceId}`,
+        `Duitku disbursement callback for unknown withdrawal ${referenceId}`,
       );
       return;
     }
@@ -478,13 +483,20 @@ export class AffiliatesService {
       return;
     }
 
-    if (xenditStatus === 'SUCCEEDED') {
+    if (duitkuStatusCode === '00') {
       withdrawal.status = WithdrawalStatus.PAID;
       await this.withdrawalRepository.save(withdrawal);
       return;
     }
 
-    // FAILED, CANCELLED, REVERSED, or anything else non-successful: refund.
+    if (duitkuStatusCode !== '01') {
+      this.logger.log(
+        `Duitku disbursement callback for ${referenceId} with non-final status ${duitkuStatusCode} - no action taken.`,
+      );
+      return;
+    }
+
+    // '01' (failed): refund.
     const queryRunner = this.dataSource.createQueryRunner();
     await queryRunner.connect();
     await queryRunner.startTransaction();
@@ -512,7 +524,7 @@ export class AffiliatesService {
         type: CommissionLogType.CREDIT,
         amount: withdrawal.amount,
         balanceAfter: refundedBalance.toFixed(2),
-        description: `Refund for failed withdrawal ${withdrawal.id} (Xendit status: ${xenditStatus})`,
+        description: `Refund for failed withdrawal ${withdrawal.id} (Duitku status: ${duitkuStatusCode})`,
       });
       await queryRunner.manager.save(log);
 

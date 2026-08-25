@@ -1,14 +1,14 @@
 # Topup & Affiliate Platform — Backend
 
-A REST API for a game coin top-up service with a built-in affiliate program. Customers buy coin packages and pay through Xendit, affiliates earn commission on purchases made through their referral link, and superadmins run approvals, commission rules, and payouts.
+A REST API for a game coin top-up service with a built-in affiliate program. Customers buy coin packages and pay through Duitku, affiliates earn commission on purchases made through their referral link, and superadmins run approvals, commission rules, and payouts.
 
-Built with NestJS, PostgreSQL (via TypeORM), and Xendit for payments and payouts. No frontend here — this is the API only.
+Built with NestJS, PostgreSQL (via TypeORM), and Duitku for payments and payouts. No frontend here — this is the API only.
 
 ## Stack
 
 - NestJS 11 + TypeScript
 - PostgreSQL + TypeORM
-- Xendit (Invoice API for payments, Payout API for affiliate withdrawals)
+- Duitku (Pop/createInvoice for payments, Disbursement/Transfer Online for affiliate withdrawals)
 - JWT auth (access + refresh tokens) with bcrypt password hashing
 - Jest for unit + e2e tests
 
@@ -35,8 +35,9 @@ Once it's running, there's also a live interactive API explorer at **`http://loc
 | Variable | What it's for |
 |---|---|
 | `DB_HOST`, `DB_PORT`, `DB_USERNAME`, `DB_PASSWORD`, `DB_NAME` | Postgres connection |
-| `XENDIT_SECRET_KEY` | Your Xendit secret key (test mode while developing) |
-| `XENDIT_CALLBACK_TOKEN` | The verification token Xendit shows you under Settings → Developers → Callbacks. We check every incoming webhook against this. |
+| `DUITKU_MERCHANT_CODE`, `DUITKU_API_KEY` | Your Duitku merchant credentials |
+| `DUITKU_ENV` | `sandbox` (default) or `production` — picks which Duitku base URL to call |
+| `DUITKU_CALLBACK_URL`, `DUITKU_RETURN_URL` | Sent with every invoice creation request — where Duitku posts the payment callback, and where the customer is redirected after paying |
 | `JWT_SECRET` | Signs access/refresh tokens |
 | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `SMTP_FROM` | Optional — sends a notification email on every contact form submission. If left unset, submissions are still stored, just no email goes out (logged instead). |
 | `SUPPORT_NOTIFICATION_EMAIL` | Optional — where contact form notifications are sent. No address, no email (submissions are still stored either way). |
@@ -74,8 +75,8 @@ Everything below is prefixed with `/api/v1`. Auth-protected routes need `Authori
 |---|---|---|
 | `GET` | `/topup/products` | List active coin packages a customer can buy |
 | `POST` | `/topup/check-id` | Validate a game/user ID before checkout. Body: `{ game_code, user_id, zone_id? }` |
-| `POST` | `/topup/checkout` | Start a purchase. Body: `{ product_id, target_user_id, target_zone_id?, affiliate_code? }`. Returns a Xendit invoice URL to pay. |
-| `GET` | `/topup/transactions/:id` | Check a transaction's status (useful after redirecting back from Xendit) |
+| `POST` | `/topup/checkout` | Start a purchase. Body: `{ product_id, target_user_id, target_zone_id?, affiliate_code? }`. Returns a Duitku invoice URL to pay. |
+| `GET` | `/topup/transactions/:id` | Check a transaction's status (useful after redirecting back from Duitku) |
 
 ### Contact (public, no login needed)
 
@@ -115,26 +116,28 @@ Everything here needs a superadmin JWT. There's no self-registration for admins 
 | `PATCH` | `/admin/products/:id` | Edit a product (price, coin amount, bonus, flag, status, etc.) |
 | `DELETE` | `/admin/products/:id` | Soft-delete a product — hidden from every listing, row stays in the database so past transactions still resolve |
 | `GET` | `/admin/withdrawals` | List withdrawal requests. Filter with `?status=pending\|approved\|rejected\|paid\|failed` |
-| `POST` | `/admin/withdrawals/:id/approve` | Approve a withdrawal — this triggers a real Xendit Payout call |
-| `POST` | `/admin/withdrawals/:id/reject` | Decline a withdrawal before it's sent to Xendit (bad bank details, fraud, etc.) — refunds the locked balance |
+| `POST` | `/admin/withdrawals/:id/approve` | Approve a withdrawal — this triggers a real Duitku disbursement call |
+| `POST` | `/admin/withdrawals/:id/reject` | Decline a withdrawal before it's sent to Duitku (bad bank details, fraud, etc.) — refunds the locked balance |
 | `GET` | `/admin/transactions` | Monitor all transactions, paginated |
 | `GET` | `/admin/contact-messages` | List contact form submissions. Filter with `?status=open\|resolved` |
 | `POST` | `/admin/contact-messages/:id/resolve` | Mark a submission resolved |
 | `DELETE` | `/admin/contact-messages/:id` | Soft-delete a submission — hidden from listings, row stays in the database |
 
-### Webhooks (Xendit calls these — you don't)
+### Webhooks (Duitku calls these — you don't)
 
 | Method | Path | What it does |
 |---|---|---|
-| `POST` | `/webhooks/xendit/invoice` | Xendit tells us how a payment went. `PAID`/`SETTLED` triggers coin injection + commission credit, `EXPIRED` marks the transaction expired, anything else unrecognized marks it failed. |
-| `POST` | `/webhooks/xendit/disbursement` | Xendit tells us a payout succeeded or failed here. Updates the withdrawal and refunds the balance on failure. |
+| `POST` | `/webhooks/duitku/invoice` | Duitku tells us how a payment went. `resultCode: "00"` triggers coin injection + commission credit; anything else marks it failed. |
+| `POST` | `/webhooks/duitku/disbursement` | Duitku tells us a payout succeeded or failed here. Updates the withdrawal and refunds the balance on failure. |
 
-Both check the `x-callback-token` header against `XENDIT_CALLBACK_TOKEN` and reject anything that doesn't match.
+Both are form-urlencoded (not JSON) and carry their own `signature` field — an HMAC/SHA-256 hash computed from the merchant code, amount, and order/reference ID using `DUITKU_API_KEY`. Anything with a missing or wrong signature gets rejected.
 
 ## What's still not real
 
 Worth knowing before you assume everything's production-ready:
 
 - **Provider Top-Up (the actual game coin delivery) is mocked.** `check-id` returns a fake username, `injectCoin` always "succeeds." No real vendor picked yet — swap it out by implementing `ProviderTopUpPort` once you have one.
-- **Xendit payment/payout creation is real and verified**, but the webhook callbacks have only been simulated in tests — nobody's actually paid a real invoice or received a real payout callback yet, because this local setup has no public URL for Xendit to call back to. A tunnel (ngrok or similar) would fix that for testing.
+- **Duitku integration has never been exercised against a real account.** There's no Duitku merchant account yet (switched over from Xendit, which *was* live-verified end-to-end, including a real paid invoice and a real webhook — see `artifacts/access/README.md` at the scaffold root for that history). The request/response shapes, signature formulas, and endpoints here were built from Duitku's public documentation and official Laravel library, not tested against a real API call. Treat every field name and the disbursement flow especially as something to re-verify once real sandbox credentials exist, before trusting it with real money.
+- **Duitku's invoice callback has no explicit "expired" signal** the way Xendit's did — it only fires for a definitive success/failure result. A transaction that's never paid within its window just stays `pending` unless something else (e.g. a scheduled job polling Duitku's transaction-status endpoint) is added later; `TopupService.handleInvoiceExpired` still exists and is tested for that future use, it's just not wired to anything yet.
+- **Duitku disbursement needs a real bank-code mapping before it can work at all.** Unlike Xendit's derivable `ID_<BANK_NAME>` convention, Duitku uses its own bank code list; `DuitkuService` deliberately throws a clear error instead of guessing at one — this needs to be sourced from Duitku's real bank list once an account exists.
 - **No frontend.** This is API-only by design for now.

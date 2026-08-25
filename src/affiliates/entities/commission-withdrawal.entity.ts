@@ -16,8 +16,7 @@ export enum WithdrawalStatus {
   /**
    * Not in the source document's ERD (pending, approved, rejected, paid)
    * but needed to distinguish an admin-rejected request (never sent to
-   * Xendit) from a Xendit payout that was sent and came back
-   * FAILED/CANCELLED/REVERSED.
+   * Duitku) from a Duitku disbursement that was sent and came back failed.
    */
   FAILED = 'failed',
 }
@@ -54,12 +53,12 @@ export class CommissionWithdrawal {
   status: WithdrawalStatus;
 
   @Column({
-    name: 'xendit_disbursement_id',
+    name: 'duitku_disbursement_id',
     type: 'varchar',
     unique: true,
     nullable: true,
   })
-  xenditDisbursementId: string | null;
+  duitkuDisbursementId: string | null;
 
   @Column({ name: 'admin_notes', type: 'varchar', nullable: true })
   adminNotes: string | null;

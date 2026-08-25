@@ -61,12 +61,12 @@ export class Transaction {
   affiliateCommission: string | null;
 
   @Column({
-    name: 'xendit_invoice_id',
+    name: 'duitku_reference',
     type: 'varchar',
     unique: true,
     nullable: true,
   })
-  xenditInvoiceId: string | null;
+  duitkuReference: string | null;
 
   @Column({
     name: 'payment_status',

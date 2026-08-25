@@ -3,7 +3,7 @@ import type { ProviderTopUpPort } from '../provider/provider-top-up.port';
 import { AffiliatesService } from '../affiliates/affiliates.service';
 import { ProductsService } from '../products/products.service';
 import { TransactionsService } from '../transactions/transactions.service';
-import { XenditService } from '../xendit/xendit.service';
+import { DuitkuService } from '../duitku/duitku.service';
 import { TopupService } from './topup.service';
 import { ProductStatus } from '../products/entities/product.entity';
 import { PaymentStatus } from '../transactions/entities/transaction.entity';
@@ -23,7 +23,7 @@ describe('TopupService', () => {
     Pick<
       TransactionsService,
       | 'createPending'
-      | 'attachXenditInvoice'
+      | 'attachDuitkuReference'
       | 'findByExternalId'
       | 'markPaid'
       | 'markExpired'
@@ -31,7 +31,7 @@ describe('TopupService', () => {
       | 'markProviderResult'
     >
   >;
-  let xenditService: jest.Mocked<Pick<XenditService, 'createInvoice'>>;
+  let duitkuService: jest.Mocked<Pick<DuitkuService, 'createInvoice'>>;
   let creditCommissionMock: jest.Mock;
   let affiliatesService: jest.Mocked<
     Pick<AffiliatesService, 'creditCommissionForTransaction'>
@@ -61,14 +61,14 @@ describe('TopupService', () => {
     productsService = { findActiveByIdOrFail: jest.fn() };
     transactionsService = {
       createPending: jest.fn(),
-      attachXenditInvoice: jest.fn(),
+      attachDuitkuReference: jest.fn(),
       findByExternalId: jest.fn(),
       markPaid: jest.fn(),
       markExpired: jest.fn(),
       markFailed: jest.fn(),
       markProviderResult: jest.fn(),
     };
-    xenditService = { createInvoice: jest.fn() };
+    duitkuService = { createInvoice: jest.fn() };
     creditCommissionMock = jest.fn();
     affiliatesService = {
       creditCommissionForTransaction: creditCommissionMock,
@@ -78,7 +78,7 @@ describe('TopupService', () => {
       provider,
       productsService as unknown as ProductsService,
       transactionsService as unknown as TransactionsService,
-      xenditService as unknown as XenditService,
+      duitkuService as unknown as DuitkuService,
       affiliatesService as unknown as AffiliatesService,
     );
   });
@@ -103,15 +103,16 @@ describe('TopupService', () => {
   });
 
   describe('checkout', () => {
-    it('creates a pending transaction, requests a Xendit invoice, and attaches it', async () => {
+    it('creates a pending transaction, requests a Duitku invoice, and attaches it', async () => {
       productsService.findActiveByIdOrFail.mockResolvedValue(product);
       transactionsService.createPending.mockResolvedValue({
         id: 'TRX-20260805-0001',
       } as any);
-      xenditService.createInvoice.mockResolvedValue({
-        invoiceId: 'xnd-inv-1',
-        invoiceUrl: 'https://checkout.xendit.co/web/xnd-inv-1',
-        status: 'PENDING',
+      duitkuService.createInvoice.mockResolvedValue({
+        invoiceId: 'D7999PJ38HNY7TSKHSGX',
+        invoiceUrl:
+          'https://app-sandbox.duitku.com/checkout/D7999PJ38HNY7TSKHSGX',
+        status: '00',
       });
 
       const result = await service.checkout({
@@ -127,19 +128,20 @@ describe('TopupService', () => {
         targetZoneId: '99',
         referralCode: 'AFF123',
       });
-      expect(xenditService.createInvoice).toHaveBeenCalledWith({
+      expect(duitkuService.createInvoice).toHaveBeenCalledWith({
         externalId: 'TRX-20260805-0001',
         amount: 20000,
         description: 'Top-up 120 Diamonds for 1',
       });
-      expect(transactionsService.attachXenditInvoice).toHaveBeenCalledWith(
+      expect(transactionsService.attachDuitkuReference).toHaveBeenCalledWith(
         'TRX-20260805-0001',
-        'xnd-inv-1',
+        'D7999PJ38HNY7TSKHSGX',
       );
       expect(result).toEqual({
         transaction_id: 'TRX-20260805-0001',
-        xendit_invoice_id: 'xnd-inv-1',
-        invoice_url: 'https://checkout.xendit.co/web/xnd-inv-1',
+        duitku_reference: 'D7999PJ38HNY7TSKHSGX',
+        invoice_url:
+          'https://app-sandbox.duitku.com/checkout/D7999PJ38HNY7TSKHSGX',
       });
     });
   });

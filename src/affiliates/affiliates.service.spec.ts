@@ -8,7 +8,7 @@ import { SettingsService } from '../settings/settings.service';
 import { TransactionsService } from '../transactions/transactions.service';
 import { UserRole, UserStatus } from '../users/entities/user.entity';
 import { UsersService } from '../users/users.service';
-import { XenditService } from '../xendit/xendit.service';
+import { DuitkuService } from '../duitku/duitku.service';
 import { AffiliatesService } from './affiliates.service';
 import { AffiliatorProfile } from './entities/affiliator-profile.entity';
 import { CommissionLog } from './entities/commission-log.entity';
@@ -65,7 +65,7 @@ describe('AffiliatesService', () => {
     const settingsService = {
       get: settingsGetMock,
     } as unknown as SettingsService;
-    const xenditService = {} as unknown as XenditService;
+    const duitkuService = {} as unknown as DuitkuService;
 
     service = new AffiliatesService(
       profileRepository,
@@ -75,7 +75,7 @@ describe('AffiliatesService', () => {
       usersService,
       transactionsService,
       settingsService,
-      xenditService,
+      duitkuService,
     );
   });
 

@@ -10,7 +10,7 @@ import type { ProviderTopUpPort } from '../provider/provider-top-up.port';
 import { AffiliatesService } from '../affiliates/affiliates.service';
 import { ProductsService } from '../products/products.service';
 import { TransactionsService } from '../transactions/transactions.service';
-import { XenditService } from '../xendit/xendit.service';
+import { DuitkuService } from '../duitku/duitku.service';
 import { CheckIdDto } from './dto/check-id.dto';
 import { CheckoutDto } from './dto/checkout.dto';
 import { PaymentStatus } from '../transactions/entities/transaction.entity';
@@ -24,7 +24,7 @@ export class TopupService {
     private readonly provider: ProviderTopUpPort,
     private readonly productsService: ProductsService,
     private readonly transactionsService: TransactionsService,
-    private readonly xenditService: XenditService,
+    private readonly duitkuService: DuitkuService,
     private readonly affiliatesService: AffiliatesService,
   ) {}
 
@@ -86,27 +86,27 @@ export class TopupService {
       referralCode: dto.affiliate_code,
     });
 
-    const invoice = await this.xenditService.createInvoice({
+    const invoice = await this.duitkuService.createInvoice({
       externalId: transaction.id,
       amount: Number(product.sellingPrice),
       description: `Top-up ${product.name} for ${dto.target_user_id}`,
     });
 
-    await this.transactionsService.attachXenditInvoice(
+    await this.transactionsService.attachDuitkuReference(
       transaction.id,
       invoice.invoiceId,
     );
 
     return {
       transaction_id: transaction.id,
-      xendit_invoice_id: invoice.invoiceId,
+      duitku_reference: invoice.invoiceId,
       invoice_url: invoice.invoiceUrl,
     };
   }
 
   /**
-   * Called by the Xendit invoice callback controller after the
-   * x-callback-token has already been verified.
+   * Called by the Duitku invoice callback controller after the callback
+   * signature has already been verified.
    */
   async handleInvoicePaid(externalId: string): Promise<void> {
     const transaction =
@@ -114,7 +114,7 @@ export class TopupService {
 
     if (!transaction) {
       throw new NotFoundException(
-        `Transaction ${externalId} not found for Xendit callback`,
+        `Transaction ${externalId} not found for Duitku callback`,
       );
     }
 
@@ -154,10 +154,16 @@ export class TopupService {
   }
 
   /**
-   * Called by the Xendit invoice callback controller for an EXPIRED status.
-   * A transaction that already paid (a late "payment received after
-   * expiry" case can still arrive as a separate PAID callback per Xendit's
-   * own settings) must never be downgraded back to expired.
+   * Marks a transaction expired. Not currently reachable from the Duitku
+   * webhook - unlike Xendit, Duitku's invoice callback only ever fires for
+   * a definitive success/failure result (resultCode 00/01/02), with no
+   * separate "expired" push notification. A transaction that never gets
+   * paid within its window simply stays pending unless something else
+   * (e.g. a future reconciliation job polling Duitku's transactionStatus
+   * endpoint for old pending transactions) calls this. Kept as a real,
+   * tested method so that reconciliation path has somewhere to call into.
+   * A transaction that already paid must never be downgraded back to
+   * expired.
    */
   async handleInvoiceExpired(externalId: string): Promise<void> {
     const transaction =
@@ -165,7 +171,7 @@ export class TopupService {
 
     if (!transaction) {
       throw new NotFoundException(
-        `Transaction ${externalId} not found for Xendit callback`,
+        `Transaction ${externalId} not found for Duitku callback`,
       );
     }
 
@@ -180,12 +186,8 @@ export class TopupService {
   }
 
   /**
-   * Called by the Xendit invoice callback controller for any status that
-   * isn't PAID/SETTLED/EXPIRED. Xendit's Invoice API doesn't currently emit
-   * a distinct "payment failed" status (it only ever sends
-   * PENDING/PAID/SETTLED/EXPIRED), but PaymentStatus.FAILED is part of the
-   * source ERD, so any unrecognized status is treated as a failure rather
-   * than left stuck pending forever.
+   * Called by the Duitku invoice callback controller when resultCode
+   * indicates the payment failed or was canceled (not the success case).
    */
   async handleInvoiceFailed(externalId: string): Promise<void> {
     const transaction =
@@ -193,7 +195,7 @@ export class TopupService {
 
     if (!transaction) {
       throw new NotFoundException(
-        `Transaction ${externalId} not found for Xendit callback`,
+        `Transaction ${externalId} not found for Duitku callback`,
       );
     }
 

@@ -40,20 +40,20 @@ export class TransactionsService {
     return this.transactionRepository.save(transaction);
   }
 
-  async attachXenditInvoice(
+  async attachDuitkuReference(
     transactionId: string,
-    xenditInvoiceId: string,
+    duitkuReference: string,
   ): Promise<void> {
     await this.transactionRepository.update(transactionId, {
-      xenditInvoiceId,
+      duitkuReference,
     });
   }
 
-  async findByXenditInvoiceId(
-    xenditInvoiceId: string,
+  async findByDuitkuReference(
+    duitkuReference: string,
   ): Promise<Transaction | null> {
     return this.transactionRepository.findOne({
-      where: { xenditInvoiceId },
+      where: { duitkuReference },
     });
   }
 

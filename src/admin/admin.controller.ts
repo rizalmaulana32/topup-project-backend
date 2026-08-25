@@ -221,7 +221,7 @@ export class AdminController {
 
   @Post('withdrawals/:id/approve')
   @ApiOperation({
-    summary: 'Approve a withdrawal — triggers a real Xendit payout',
+    summary: 'Approve a withdrawal — triggers a real Duitku disbursement',
   })
   async approveWithdrawal(
     @Param('id') id: string,
@@ -236,7 +236,7 @@ export class AdminController {
       data: {
         withdrawal_id: withdrawal.id,
         status: withdrawal.status,
-        xendit_disbursement_id: withdrawal.xenditDisbursementId,
+        duitku_disbursement_id: withdrawal.duitkuDisbursementId,
       },
     };
   }
@@ -244,7 +244,7 @@ export class AdminController {
   @Post('withdrawals/:id/reject')
   @ApiOperation({
     summary:
-      'Reject a withdrawal before it is sent to Xendit and refund the locked balance',
+      'Reject a withdrawal before it is sent to Duitku and refund the locked balance',
   })
   async rejectWithdrawal(
     @Param('id') id: string,

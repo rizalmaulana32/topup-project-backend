@@ -14,30 +14,32 @@ import {
   ProviderStatus,
   Transaction,
 } from '../src/transactions/entities/transaction.entity';
-import { XenditService } from '../src/xendit/xendit.service';
+import { DuitkuService } from '../src/duitku/duitku.service';
 
 /**
  * Exercises the full customer top-up purchase flow (check-id -> checkout ->
- * Xendit invoice callback -> mock coin injection) against a real Postgres
+ * Duitku invoice callback -> mock coin injection) against a real Postgres
  * database (via TypeOrmModule, see development/backend/docker-compose.yml).
- * XenditService is overridden with a deterministic double because this
- * environment has no real Xendit test-mode credentials; the mock Provider
- * Top-Up service is left as the real implementation since it is already
+ * DuitkuService is overridden with a deterministic double because this
+ * environment has no real Duitku credentials; the mock Provider Top-Up
+ * service is left as the real implementation since it is already
  * deterministic and is the boundary this slice is meant to validate.
  */
-const TEST_CALLBACK_TOKEN = 'e2e-test-callback-token';
+const TEST_SIGNATURE = 'e2e-test-signature';
 
-class FakeXenditService {
+class FakeDuitkuService {
   createInvoice(params: { externalId: string }) {
     return Promise.resolve({
-      invoiceId: `fake-invoice-${params.externalId}`,
-      invoiceUrl: `https://checkout.xendit.co/web/fake-invoice-${params.externalId}`,
-      status: 'PENDING',
+      invoiceId: `fake-reference-${params.externalId}`,
+      invoiceUrl: `https://app-sandbox.duitku.com/checkout/fake-reference-${params.externalId}`,
+      status: '00',
     });
   }
 
-  verifyCallbackToken(receivedToken: string | undefined): boolean {
-    return receivedToken === TEST_CALLBACK_TOKEN;
+  verifyInvoiceCallbackSignature(params: {
+    signature: string | undefined;
+  }): boolean {
+    return params.signature === TEST_SIGNATURE;
   }
 }
 
@@ -51,8 +53,8 @@ describe('Topup (e2e)', () => {
     const moduleFixture: TestingModule = await Test.createTestingModule({
       imports: [AppModule],
     })
-      .overrideProvider(XenditService)
-      .useClass(FakeXenditService)
+      .overrideProvider(DuitkuService)
+      .useClass(FakeDuitkuService)
       .compile();
 
     app = moduleFixture.createNestApplication();
@@ -155,7 +157,7 @@ describe('Topup (e2e)', () => {
       .expect(404);
   });
 
-  it('runs the full checkout -> Xendit callback -> coin injection path', async () => {
+  it('runs the full checkout -> Duitku callback -> coin injection path', async () => {
     const checkoutResponse = await request(app.getHttpServer())
       .post('/api/v1/topup/checkout')
       .send({
@@ -169,13 +171,13 @@ describe('Topup (e2e)', () => {
       success: boolean;
       data: {
         transaction_id: string;
-        xendit_invoice_id: string;
+        duitku_reference: string;
         invoice_url: string;
       };
     };
-    const { transaction_id, xendit_invoice_id, invoice_url } = body.data;
+    const { transaction_id, duitku_reference, invoice_url } = body.data;
     expect(transaction_id).toMatch(/^TRX-\d{8}-\d{4}$/);
-    expect(xendit_invoice_id).toBe(`fake-invoice-${transaction_id}`);
+    expect(duitku_reference).toBe(`fake-reference-${transaction_id}`);
     expect(invoice_url).toContain(transaction_id);
 
     const pendingTransaction = await transactionRepository.findOne({
@@ -184,12 +186,14 @@ describe('Topup (e2e)', () => {
     expect(pendingTransaction?.paymentStatus).toBe(PaymentStatus.PENDING);
 
     await request(app.getHttpServer())
-      .post('/api/v1/webhooks/xendit/invoice')
-      .set('x-callback-token', TEST_CALLBACK_TOKEN)
+      .post('/api/v1/webhooks/duitku/invoice')
+      .type('form')
       .send({
-        external_id: transaction_id,
-        status: 'PAID',
-        id: xendit_invoice_id,
+        merchantOrderId: transaction_id,
+        amount: '20000',
+        resultCode: '00',
+        reference: duitku_reference,
+        signature: TEST_SIGNATURE,
       })
       .expect(200)
       .expect({ success: true });
@@ -224,39 +228,7 @@ describe('Topup (e2e)', () => {
     );
   });
 
-  it('marks a transaction expired on an EXPIRED Xendit callback', async () => {
-    const checkoutResponse = await request(app.getHttpServer())
-      .post('/api/v1/topup/checkout')
-      .send({
-        product_id: testProduct.id,
-        target_user_id: '87654321',
-        target_zone_id: '4321',
-      })
-      .expect(201);
-
-    const body = checkoutResponse.body as {
-      data: { transaction_id: string; xendit_invoice_id: string };
-    };
-    const { transaction_id, xendit_invoice_id } = body.data;
-
-    await request(app.getHttpServer())
-      .post('/api/v1/webhooks/xendit/invoice')
-      .set('x-callback-token', TEST_CALLBACK_TOKEN)
-      .send({
-        external_id: transaction_id,
-        status: 'EXPIRED',
-        id: xendit_invoice_id,
-      })
-      .expect(200)
-      .expect({ success: true });
-
-    const expiredTransaction = await transactionRepository.findOne({
-      where: { id: transaction_id },
-    });
-    expect(expiredTransaction?.paymentStatus).toBe(PaymentStatus.EXPIRED);
-  });
-
-  it('marks a transaction failed on an unrecognized Xendit callback status', async () => {
+  it('marks a transaction failed on a non-success Duitku callback resultCode', async () => {
     const checkoutResponse = await request(app.getHttpServer())
       .post('/api/v1/topup/checkout')
       .send({
@@ -267,17 +239,19 @@ describe('Topup (e2e)', () => {
       .expect(201);
 
     const body = checkoutResponse.body as {
-      data: { transaction_id: string; xendit_invoice_id: string };
+      data: { transaction_id: string; duitku_reference: string };
     };
-    const { transaction_id, xendit_invoice_id } = body.data;
+    const { transaction_id, duitku_reference } = body.data;
 
     await request(app.getHttpServer())
-      .post('/api/v1/webhooks/xendit/invoice')
-      .set('x-callback-token', TEST_CALLBACK_TOKEN)
+      .post('/api/v1/webhooks/duitku/invoice')
+      .type('form')
       .send({
-        external_id: transaction_id,
-        status: 'FAILED',
-        id: xendit_invoice_id,
+        merchantOrderId: transaction_id,
+        amount: '20000',
+        resultCode: '01',
+        reference: duitku_reference,
+        signature: TEST_SIGNATURE,
       })
       .expect(200)
       .expect({ success: true });
@@ -288,11 +262,16 @@ describe('Topup (e2e)', () => {
     expect(failedTransaction?.paymentStatus).toBe(PaymentStatus.FAILED);
   });
 
-  it('rejects a Xendit callback with an invalid token', async () => {
+  it('rejects a Duitku callback with an invalid signature', async () => {
     await request(app.getHttpServer())
-      .post('/api/v1/webhooks/xendit/invoice')
-      .set('x-callback-token', 'wrong-token')
-      .send({ external_id: 'TRX-doesnotmatter', status: 'PAID' })
+      .post('/api/v1/webhooks/duitku/invoice')
+      .type('form')
+      .send({
+        merchantOrderId: 'TRX-doesnotmatter',
+        amount: '20000',
+        resultCode: '00',
+        signature: 'wrong-signature',
+      })
       .expect(401);
   });
 });

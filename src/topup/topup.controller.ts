@@ -25,7 +25,7 @@ export class TopupController {
 
   @Post('checkout')
   @ApiOperation({
-    summary: 'Start a purchase and get a Xendit invoice to pay',
+    summary: 'Start a purchase and get a Duitku invoice to pay',
   })
   async checkout(@Body() dto: CheckoutDto) {
     const data = await this.topupService.checkout(dto);

@@ -1,22 +1,22 @@
 import { Module } from '@nestjs/common';
 import { AffiliatesModule } from '../affiliates/affiliates.module';
+import { DuitkuModule } from '../duitku/duitku.module';
 import { ProductsModule } from '../products/products.module';
 import { ProviderModule } from '../provider/provider.module';
 import { TransactionsModule } from '../transactions/transactions.module';
-import { XenditModule } from '../xendit/xendit.module';
 import { TopupController } from './topup.controller';
 import { TopupService } from './topup.service';
-import { XenditWebhookController } from './webhook/xendit-webhook.controller';
+import { DuitkuWebhookController } from './webhook/duitku-webhook.controller';
 
 @Module({
   imports: [
     ProductsModule,
     TransactionsModule,
     ProviderModule,
-    XenditModule,
+    DuitkuModule,
     AffiliatesModule,
   ],
-  controllers: [TopupController, XenditWebhookController],
+  controllers: [TopupController, DuitkuWebhookController],
   providers: [TopupService],
 })
 export class TopupModule {}
