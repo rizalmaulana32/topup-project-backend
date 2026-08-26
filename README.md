@@ -38,6 +38,9 @@ Once it's running, there's also a live interactive API explorer at **`http://loc
 | `DUITKU_MERCHANT_CODE`, `DUITKU_API_KEY` | Your Duitku merchant credentials |
 | `DUITKU_ENV` | `sandbox` (default) or `production` — picks which Duitku base URL to call |
 | `DUITKU_CALLBACK_URL`, `DUITKU_RETURN_URL` | Sent with every invoice creation request — where Duitku posts the payment callback, and where the customer is redirected after paying |
+| `PROVIDER_TOP_UP_VENDOR` | `mock` (default) or `momo` — picks which `ProviderTopUpPort` implementation actually delivers coins |
+| `MOMO_MERCHANT_ID`, `MOMO_API_SECRET` | Your MomoLive Coin Merchant credentials — only read when `PROVIDER_TOP_UP_VENDOR=momo` |
+| `MOMO_BASE_URL` | MomoLive API base URL — defaults to the sandbox (`https://proxytest.momoindo.com`) |
 | `JWT_SECRET` | Signs access/refresh tokens |
 | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `SMTP_FROM` | Optional — sends a notification email on every contact form submission. If left unset, submissions are still stored, just no email goes out (logged instead). |
 | `SUPPORT_NOTIFICATION_EMAIL` | Optional — where contact form notifications are sent. No address, no email (submissions are still stored either way). |
@@ -136,7 +139,7 @@ Both are form-urlencoded (not JSON) and carry their own `signature` field — an
 
 Worth knowing before you assume everything's production-ready:
 
-- **Provider Top-Up (the actual game coin delivery) is mocked.** `check-id` returns a fake username, `injectCoin` always "succeeds." No real vendor picked yet — swap it out by implementing `ProviderTopUpPort` once you have one.
+- **Provider Top-Up (the actual game coin delivery) has a real implementation now, but mock stays the default.** `MomoProviderTopUpService` (MomoLive Coin Merchant API — `query-user`, `balance`, `transfer-coin`) is real-verified against the sandbox with real test credentials; set `PROVIDER_TOP_UP_VENDOR=momo` to use it. Until that's set, `check-id` returns a fake username and `injectCoin` always "succeeds" via the mock — nothing deployed does real coin transfers yet.
 - **Duitku payment collection (`createInvoice`) is real and verified** — tested directly against the real sandbox API with the client's actual credentials, first try, exact match on every field.
 - **Duitku disbursement (affiliate payouts) is not usable yet.** The account's disbursement feature isn't provisioned — real test calls to both the inquiry and transfer endpoints return the same generic rejection regardless of input, even with a deliberately wrong signature. Real testing also revealed the flow needs two separate calls (inquiry, then transfer using its result) with distinct signature formulas, plus a merchant `userId`/`email` the client hasn't located in their dashboard yet. `DuitkuService.createPayout` implements the two-call flow but none of it can be confirmed correct until disbursement is actually activated.
 - **Duitku's invoice callback has no explicit "expired" signal** the way Xendit's did — it only fires for a definitive success/failure result. A transaction that's never paid within its window just stays `pending` unless something else (e.g. a scheduled job polling Duitku's transaction-status endpoint) is added later; `TopupService.handleInvoiceExpired` still exists and is tested for that future use, it's just not wired to anything yet.
