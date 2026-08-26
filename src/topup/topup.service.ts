@@ -8,6 +8,7 @@ import {
 import { PROVIDER_TOP_UP_PORT } from '../provider/provider-top-up.port';
 import type { ProviderTopUpPort } from '../provider/provider-top-up.port';
 import { AffiliatesService } from '../affiliates/affiliates.service';
+import { PlatformService } from '../platform/platform.service';
 import { ProductsService } from '../products/products.service';
 import { TransactionsService } from '../transactions/transactions.service';
 import { DuitkuService } from '../duitku/duitku.service';
@@ -26,6 +27,7 @@ export class TopupService {
     private readonly transactionsService: TransactionsService,
     private readonly duitkuService: DuitkuService,
     private readonly affiliatesService: AffiliatesService,
+    private readonly platformService: PlatformService,
   ) {}
 
   async listActiveProducts() {
@@ -147,11 +149,20 @@ export class TopupService {
       response: injectResult.response,
     });
 
-    if (injectResult.success && transaction.referralCode) {
-      await this.affiliatesService.creditCommissionForTransaction({
-        referralCode: transaction.referralCode,
+    if (injectResult.success) {
+      const commissionPaid = transaction.referralCode
+        ? await this.affiliatesService.creditCommissionForTransaction({
+            referralCode: transaction.referralCode,
+            transactionId: transaction.id,
+            grossAmount: transaction.grossAmount,
+          })
+        : '0.00';
+
+      await this.platformService.creditRevenueForTransaction({
         transactionId: transaction.id,
         grossAmount: transaction.grossAmount,
+        baseCost: transaction.product.basePrice,
+        commissionPaid,
       });
     }
   }

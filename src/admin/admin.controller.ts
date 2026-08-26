@@ -21,6 +21,7 @@ import { RolesGuard } from '../auth/roles.guard';
 import { AuthenticatedUser } from '../auth/types/jwt-payload';
 import { ContactService } from '../contact/contact.service';
 import { DuitkuService } from '../duitku/duitku.service';
+import { PlatformService } from '../platform/platform.service';
 import { PROVIDER_TOP_UP_PORT } from '../provider/provider-top-up.port';
 import type { ProviderTopUpPort } from '../provider/provider-top-up.port';
 import { ProductsService } from '../products/products.service';
@@ -30,8 +31,10 @@ import { UserRole } from '../users/entities/user.entity';
 import { CreateProductDto } from './dto/create-product.dto';
 import { ListAffiliatesDto } from './dto/list-affiliates.dto';
 import { ListContactMessagesDto } from './dto/list-contact-messages.dto';
+import { ListPlatformWithdrawalsDto } from '../platform/dto/list-platform-withdrawals.dto';
 import { ListTransactionsDto } from './dto/list-transactions.dto';
 import { ListWithdrawalsDto } from './dto/list-withdrawals.dto';
+import { PlatformWithdrawDto } from '../platform/dto/platform-withdraw.dto';
 import { ProviderCoinTransferDto } from './dto/provider-coin-transfer.dto';
 import { UpdateCommissionRateDto } from './dto/update-commission-rate.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
@@ -54,6 +57,7 @@ export class AdminController {
     @Inject(PROVIDER_TOP_UP_PORT)
     private readonly providerTopUp: ProviderTopUpPort,
     private readonly duitkuService: DuitkuService,
+    private readonly platformService: PlatformService,
   ) {}
 
   @Get('affiliates')
@@ -141,24 +145,34 @@ export class AdminController {
       data: {
         global_commission_rate: settings.globalCommissionRate,
         minimum_withdrawal_amount: settings.minimumWithdrawalAmount,
+        admin_bank_name: settings.adminBankName,
+        admin_account_number: settings.adminAccountNumber,
+        admin_account_holder: settings.adminAccountHolder,
       },
     };
   }
 
   @Patch('settings')
   @ApiOperation({
-    summary: 'Update global commission rate / minimum withdrawal amount',
+    summary:
+      'Update global commission rate / minimum withdrawal amount / admin payout bank details',
   })
   async updateSettings(@Body() dto: UpdateSettingsDto) {
     const settings = await this.settingsService.update({
       globalCommissionRate: dto.global_commission_rate,
       minimumWithdrawalAmount: dto.minimum_withdrawal_amount,
+      adminBankName: dto.admin_bank_name,
+      adminAccountNumber: dto.admin_account_number,
+      adminAccountHolder: dto.admin_account_holder,
     });
     return {
       success: true,
       data: {
         global_commission_rate: settings.globalCommissionRate,
         minimum_withdrawal_amount: settings.minimumWithdrawalAmount,
+        admin_bank_name: settings.adminBankName,
+        admin_account_number: settings.adminAccountNumber,
+        admin_account_holder: settings.adminAccountHolder,
       },
     };
   }
@@ -382,6 +396,103 @@ export class AdminController {
         target_user_id: dto.target_user_id,
         coin: dto.coin,
         provider_response: result.response,
+      },
+    };
+  }
+
+  @Get('platform/balance')
+  @ApiOperation({
+    summary:
+      "Check the platform's own accumulated revenue balance (sellingPrice - basePrice - commission, credited per paid transaction)",
+  })
+  async getPlatformBalance() {
+    const balance = await this.platformService.getBalance();
+    return { success: true, data: { balance } };
+  }
+
+  @Post('platform/withdraw')
+  @ApiOperation({
+    summary:
+      "Request a withdrawal from the platform's own revenue balance to the admin payout account on file (set via PATCH /admin/settings)",
+  })
+  async requestPlatformWithdrawal(
+    @Body() dto: PlatformWithdrawDto,
+    @Req() request: Request & { user: AuthenticatedUser },
+  ) {
+    const withdrawal = await this.platformService.requestWithdrawal(
+      dto.amount,
+      request.user.id,
+    );
+    return {
+      success: true,
+      data: {
+        withdrawal_id: withdrawal.id,
+        amount: withdrawal.amount,
+        status: withdrawal.status,
+      },
+    };
+  }
+
+  @Post('platform/withdrawals/:id/approve')
+  @ApiOperation({
+    summary:
+      'Approve a platform withdrawal — triggers a real Duitku disbursement to the admin payout account',
+  })
+  async approvePlatformWithdrawal(
+    @Param('id') id: string,
+    @Req() request: Request & { user: AuthenticatedUser },
+  ) {
+    const withdrawal = await this.platformService.approveWithdrawal(
+      id,
+      request.user.id,
+    );
+    return {
+      success: true,
+      data: {
+        withdrawal_id: withdrawal.id,
+        status: withdrawal.status,
+        duitku_disbursement_id: withdrawal.duitkuDisbursementId,
+      },
+    };
+  }
+
+  @Post('platform/withdrawals/:id/reject')
+  @ApiOperation({
+    summary:
+      'Reject a platform withdrawal before it is sent to Duitku and refund the locked balance',
+  })
+  async rejectPlatformWithdrawal(
+    @Param('id') id: string,
+    @Req() request: Request & { user: AuthenticatedUser },
+  ) {
+    const withdrawal = await this.platformService.rejectWithdrawal(
+      id,
+      request.user.id,
+    );
+    return {
+      success: true,
+      data: {
+        withdrawal_id: withdrawal.id,
+        status: withdrawal.status,
+      },
+    };
+  }
+
+  @Get('platform/withdrawals')
+  @ApiOperation({ summary: 'List platform withdrawal requests' })
+  async listPlatformWithdrawals(@Query() query: ListPlatformWithdrawalsDto) {
+    const result = await this.platformService.findAllWithdrawals({
+      status: query.status,
+      limit: query.limit ?? 20,
+      offset: query.offset ?? 0,
+    });
+    return {
+      success: true,
+      data: {
+        items: result.items,
+        total: result.total,
+        limit: query.limit ?? 20,
+        offset: query.offset ?? 0,
       },
     };
   }

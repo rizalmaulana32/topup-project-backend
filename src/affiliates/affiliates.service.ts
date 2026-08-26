@@ -189,14 +189,16 @@ export class AffiliatesService {
    * Credits commission for a referred, successfully fulfilled transaction.
    * Uses a pessimistic row lock on the affiliate profile (per the source
    * document's race-condition requirement) so concurrent credits/debits
-   * cannot corrupt the balance. No-op if the referral code does not match
-   * an active affiliate.
+   * cannot corrupt the balance. No-op (returns "0.00") if the referral code
+   * does not match an active affiliate. Returns the actual amount credited
+   * so callers (TopupService, for PlatformService.creditRevenueForTransaction)
+   * know exactly how much commission was paid out on this transaction.
    */
   async creditCommissionForTransaction(params: {
     referralCode: string;
     transactionId: string;
     grossAmount: string;
-  }): Promise<void> {
+  }): Promise<string> {
     const queryRunner = this.dataSource.createQueryRunner();
     await queryRunner.connect();
     await queryRunner.startTransaction();
@@ -220,7 +222,7 @@ export class AffiliatesService {
         this.logger.warn(
           `No active affiliate for referral code ${params.referralCode}; skipping commission credit for ${params.transactionId}.`,
         );
-        return;
+        return '0.00';
       }
 
       const commissionAmount =
@@ -249,6 +251,7 @@ export class AffiliatesService {
       });
 
       await queryRunner.commitTransaction();
+      return commissionAmount.toFixed(2);
     } catch (error) {
       await queryRunner.rollbackTransaction();
       throw error;

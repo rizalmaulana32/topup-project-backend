@@ -72,7 +72,7 @@ describe('Topup (e2e)', () => {
     transactionRepository = moduleFixture.get(getRepositoryToken(Transaction));
 
     await transactionRepository.query(
-      'TRUNCATE TABLE transactions, products RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE transactions, platform_withdrawals, platform_revenue_logs, platform_settings, products RESTART IDENTITY CASCADE',
     );
 
     testProduct = await productRepository.save(
@@ -89,7 +89,7 @@ describe('Topup (e2e)', () => {
 
   afterAll(async () => {
     await transactionRepository.query(
-      'TRUNCATE TABLE transactions, products RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE transactions, platform_withdrawals, platform_revenue_logs, platform_settings, products RESTART IDENTITY CASCADE',
     );
     await app.close();
   });

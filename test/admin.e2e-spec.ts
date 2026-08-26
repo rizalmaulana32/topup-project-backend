@@ -98,7 +98,7 @@ describe('Admin (e2e)', () => {
     productRepository = moduleFixture.get(getRepositoryToken(Product));
 
     await userRepository.query(
-      'TRUNCATE TABLE commission_withdrawals, commission_logs, transactions, affiliator_profiles, platform_settings, users, products RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE commission_withdrawals, commission_logs, transactions, affiliator_profiles, platform_withdrawals, platform_revenue_logs, platform_settings, users, products RESTART IDENTITY CASCADE',
     );
 
     const passwordHash = await bcrypt.hash('admin-secret-password', 4);
@@ -126,7 +126,7 @@ describe('Admin (e2e)', () => {
 
   afterAll(async () => {
     await userRepository.query(
-      'TRUNCATE TABLE commission_withdrawals, commission_logs, transactions, affiliator_profiles, platform_settings, users, products RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE commission_withdrawals, commission_logs, transactions, affiliator_profiles, platform_withdrawals, platform_revenue_logs, platform_settings, users, products RESTART IDENTITY CASCADE',
     );
     await app.close();
   });

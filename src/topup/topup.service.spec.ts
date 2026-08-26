@@ -1,6 +1,7 @@
 import { NotFoundException } from '@nestjs/common';
 import type { ProviderTopUpPort } from '../provider/provider-top-up.port';
 import { AffiliatesService } from '../affiliates/affiliates.service';
+import { PlatformService } from '../platform/platform.service';
 import { ProductsService } from '../products/products.service';
 import { TransactionsService } from '../transactions/transactions.service';
 import { DuitkuService } from '../duitku/duitku.service';
@@ -15,6 +16,7 @@ describe('TopupService', () => {
   // interface methods.
   let checkIdMock: jest.Mock;
   let injectCoinMock: jest.Mock;
+  let getBalanceMock: jest.Mock;
   let provider: jest.Mocked<ProviderTopUpPort>;
   let productsService: jest.Mocked<
     Pick<ProductsService, 'findActiveByIdOrFail'>
@@ -36,6 +38,10 @@ describe('TopupService', () => {
   let affiliatesService: jest.Mocked<
     Pick<AffiliatesService, 'creditCommissionForTransaction'>
   >;
+  let creditRevenueMock: jest.Mock;
+  let platformService: jest.Mocked<
+    Pick<PlatformService, 'creditRevenueForTransaction'>
+  >;
   let service: TopupService;
 
   const product = {
@@ -54,9 +60,11 @@ describe('TopupService', () => {
   beforeEach(() => {
     checkIdMock = jest.fn();
     injectCoinMock = jest.fn();
+    getBalanceMock = jest.fn();
     provider = {
       checkId: checkIdMock,
       injectCoin: injectCoinMock,
+      getBalance: getBalanceMock,
     };
     productsService = { findActiveByIdOrFail: jest.fn() };
     transactionsService = {
@@ -69,9 +77,13 @@ describe('TopupService', () => {
       markProviderResult: jest.fn(),
     };
     duitkuService = { createInvoice: jest.fn() };
-    creditCommissionMock = jest.fn();
+    creditCommissionMock = jest.fn().mockResolvedValue('0.00');
     affiliatesService = {
       creditCommissionForTransaction: creditCommissionMock,
+    };
+    creditRevenueMock = jest.fn();
+    platformService = {
+      creditRevenueForTransaction: creditRevenueMock,
     };
 
     service = new TopupService(
@@ -80,6 +92,7 @@ describe('TopupService', () => {
       transactionsService as unknown as TransactionsService,
       duitkuService as unknown as DuitkuService,
       affiliatesService as unknown as AffiliatesService,
+      platformService as unknown as PlatformService,
     );
   });
 
@@ -147,7 +160,7 @@ describe('TopupService', () => {
   });
 
   describe('handleInvoicePaid', () => {
-    it('marks the transaction paid and injects coin via the provider (no referral code, no commission credit)', async () => {
+    it('marks the transaction paid, injects coin, and credits platform revenue (no referral code, no commission credit)', async () => {
       const transaction = {
         id: 'TRX-20260805-0001',
         paymentStatus: PaymentStatus.PENDING,
@@ -181,9 +194,15 @@ describe('TopupService', () => {
         { success: true, response: '{"mock":true}' },
       );
       expect(creditCommissionMock).not.toHaveBeenCalled();
+      expect(creditRevenueMock).toHaveBeenCalledWith({
+        transactionId: 'TRX-20260805-0001',
+        grossAmount: '20000.00',
+        baseCost: '15000',
+        commissionPaid: '0.00',
+      });
     });
 
-    it('credits commission when the transaction has a referral code and injection succeeded', async () => {
+    it('credits commission and platform revenue when the transaction has a referral code and injection succeeded', async () => {
       const transaction = {
         id: 'TRX-20260805-0003',
         paymentStatus: PaymentStatus.PENDING,
@@ -200,6 +219,7 @@ describe('TopupService', () => {
         success: true,
         response: '{"mock":true}',
       });
+      creditCommissionMock.mockResolvedValue('2000.00');
 
       await service.handleInvoicePaid('TRX-20260805-0003');
 
@@ -208,9 +228,15 @@ describe('TopupService', () => {
         transactionId: 'TRX-20260805-0003',
         grossAmount: '20000.00',
       });
+      expect(creditRevenueMock).toHaveBeenCalledWith({
+        transactionId: 'TRX-20260805-0003',
+        grossAmount: '20000.00',
+        baseCost: '15000',
+        commissionPaid: '2000.00',
+      });
     });
 
-    it('does not credit commission when injection failed, even with a referral code', async () => {
+    it('does not credit commission or platform revenue when injection failed, even with a referral code', async () => {
       const transaction = {
         id: 'TRX-20260805-0004',
         paymentStatus: PaymentStatus.PENDING,
@@ -231,6 +257,7 @@ describe('TopupService', () => {
       await service.handleInvoicePaid('TRX-20260805-0004');
 
       expect(creditCommissionMock).not.toHaveBeenCalled();
+      expect(creditRevenueMock).not.toHaveBeenCalled();
     });
 
     it('is idempotent: a second callback for an already-paid transaction is ignored', async () => {

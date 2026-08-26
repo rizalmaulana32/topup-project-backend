@@ -68,5 +68,30 @@ describe('SettingsService', () => {
       expect(result.globalCommissionRate).toBe('12.50');
       expect(result.minimumWithdrawalAmount).toBe('100000.00');
     });
+
+    it('sets admin payout bank details', async () => {
+      const current = {
+        id: 1,
+        globalCommissionRate: '10.00',
+        minimumWithdrawalAmount: '100000.00',
+        adminBankName: null,
+        adminAccountNumber: null,
+        adminAccountHolder: null,
+      };
+      findOneMock.mockResolvedValue(current);
+      saveMock.mockImplementation((value: PlatformSettings) =>
+        Promise.resolve(value),
+      );
+
+      const result = await service.update({
+        adminBankName: 'BCA',
+        adminAccountNumber: '9999999999',
+        adminAccountHolder: 'Platform Admin',
+      });
+
+      expect(result.adminBankName).toBe('BCA');
+      expect(result.adminAccountNumber).toBe('9999999999');
+      expect(result.adminAccountHolder).toBe('Platform Admin');
+    });
   });
 });

@@ -28,6 +28,36 @@ export class PlatformSettings {
   })
   minimumWithdrawalAmount: string;
 
+  /**
+   * The platform's own accumulated revenue (sellingPrice - basePrice -
+   * commission paid, credited on every successfully-injected paid
+   * transaction — see PlatformService.creditRevenueForTransaction),
+   * withdrawable by the superadmin to adminBankName/adminAccountNumber
+   * via the same Duitku disbursement flow used for affiliate withdrawals.
+   */
+  @Column({
+    name: 'platform_balance',
+    type: 'decimal',
+    precision: 14,
+    scale: 2,
+    default: 0,
+  })
+  platformBalance: string;
+
+  /**
+   * The superadmin's own payout destination — set directly via
+   * PATCH /admin/settings (no self-registration form, unlike affiliate
+   * bank details) since there's exactly one of these per platform.
+   */
+  @Column({ name: 'admin_bank_name', type: 'varchar', nullable: true })
+  adminBankName: string | null;
+
+  @Column({ name: 'admin_account_number', type: 'varchar', nullable: true })
+  adminAccountNumber: string | null;
+
+  @Column({ name: 'admin_account_holder', type: 'varchar', nullable: true })
+  adminAccountHolder: string | null;
+
   @UpdateDateColumn({ name: 'updated_at' })
   updatedAt: Date;
 }

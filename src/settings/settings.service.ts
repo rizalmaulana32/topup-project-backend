@@ -27,6 +27,9 @@ export class SettingsService {
   async update(params: {
     globalCommissionRate?: number;
     minimumWithdrawalAmount?: number;
+    adminBankName?: string;
+    adminAccountNumber?: string;
+    adminAccountHolder?: string;
   }): Promise<PlatformSettings> {
     const current = await this.get();
 
@@ -36,6 +39,15 @@ export class SettingsService {
     if (params.minimumWithdrawalAmount !== undefined) {
       current.minimumWithdrawalAmount =
         params.minimumWithdrawalAmount.toFixed(2);
+    }
+    if (params.adminBankName !== undefined) {
+      current.adminBankName = params.adminBankName;
+    }
+    if (params.adminAccountNumber !== undefined) {
+      current.adminAccountNumber = params.adminAccountNumber;
+    }
+    if (params.adminAccountHolder !== undefined) {
+      current.adminAccountHolder = params.adminAccountHolder;
     }
 
     return this.settingsRepository.save(current);
