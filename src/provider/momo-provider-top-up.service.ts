@@ -19,7 +19,14 @@ interface MomoResponse<T> {
  * (dev-doc/API Terbuka Pedagang Koin MomoLive(1).md). Real-verified against
  * the sandbox on 2026-08-26 with the test credentials from that doc:
  * query-user, balance, and transfer-coin all returned real HTTP 200s with
- * code 0 and the exact documented field names on the first try.
+ * code 0 and the exact documented field names on the first try - but only
+ * once merchantId was sent as a JSON number, not a string. Deploying this
+ * for real surfaced a gap the throwaway test scripts missed: env vars are
+ * always strings, and MomoLive's server 500s on a JSON body with
+ * "merchant_id":"1000007" (quoted) even though the signature (built from
+ * the same string representation either way) still matches - it never gets
+ * that far, since their backend fails to deserialize the field before
+ * checking the signature. Fixed by storing merchantId as a number.
  *
  * MomoLive is a single platform with no game_code/zone concept, so
  * checkId's gameCode/targetZoneId parameters (kept for ProviderTopUpPort's
@@ -27,12 +34,14 @@ interface MomoResponse<T> {
  */
 @Injectable()
 export class MomoProviderTopUpService implements ProviderTopUpPort {
-  private readonly merchantId: string;
+  private readonly merchantId: number;
   private readonly apiSecret: string;
   private readonly baseUrl: string;
 
   constructor(private readonly configService: ConfigService) {
-    this.merchantId = this.configService.getOrThrow<string>('MOMO_MERCHANT_ID');
+    this.merchantId = Number(
+      this.configService.getOrThrow<string>('MOMO_MERCHANT_ID'),
+    );
     this.apiSecret = this.configService.getOrThrow<string>('MOMO_API_SECRET');
     this.baseUrl = this.configService.get<string>(
       'MOMO_BASE_URL',
