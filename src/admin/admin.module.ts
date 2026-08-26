@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { AffiliatesModule } from '../affiliates/affiliates.module';
 import { AuthModule } from '../auth/auth.module';
 import { ContactModule } from '../contact/contact.module';
+import { DuitkuModule } from '../duitku/duitku.module';
 import { ProductsModule } from '../products/products.module';
 import { ProviderModule } from '../provider/provider.module';
 import { SettingsModule } from '../settings/settings.module';
@@ -17,6 +18,7 @@ import { AdminController } from './admin.controller';
     AuthModule,
     ContactModule,
     ProviderModule,
+    DuitkuModule,
   ],
   controllers: [AdminController],
 })

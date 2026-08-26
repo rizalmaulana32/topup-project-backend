@@ -7,6 +7,7 @@ import { App } from 'supertest/types';
 import { Repository } from 'typeorm';
 import { AppModule } from '../src/app.module';
 import { AffiliatorProfile } from '../src/affiliates/entities/affiliator-profile.entity';
+import { DuitkuService } from '../src/duitku/duitku.service';
 import { Product } from '../src/products/entities/product.entity';
 import { User, UserRole, UserStatus } from '../src/users/entities/user.entity';
 
@@ -15,7 +16,24 @@ import { User, UserRole, UserStatus } from '../src/users/entities/user.entity';
  * against a real Postgres database. Superadmin accounts are provisioned
  * directly through the repository (no self-registration endpoint exists,
  * by design — see plan/topup-affiliate-platform-superadmin-commission-payout-2026-08-10.md).
+ *
+ * DuitkuService is overridden with a deterministic double for the
+ * GET /admin/duitku/balance test only — this environment has no real
+ * DUITKU_USER_ID/DUITKU_EMAIL configured, and the real endpoint currently
+ * always rejects anyway (disbursement isn't provisioned on this account —
+ * see DuitkuService.checkBalance's doc comment).
  */
+class FakeDuitkuService {
+  checkBalance() {
+    return Promise.resolve({
+      success: false,
+      balance: 0,
+      effectiveBalance: 0,
+      responseCode: '-120',
+      responseDesc: 'User not allowed',
+    });
+  }
+}
 describe('Admin (e2e)', () => {
   let app: INestApplication<App>;
   let userRepository: Repository<User>;
@@ -57,7 +75,10 @@ describe('Admin (e2e)', () => {
   beforeAll(async () => {
     const moduleFixture: TestingModule = await Test.createTestingModule({
       imports: [AppModule],
-    }).compile();
+    })
+      .overrideProvider(DuitkuService)
+      .useClass(FakeDuitkuService)
+      .compile();
 
     app = moduleFixture.createNestApplication();
     app.setGlobalPrefix('api/v1');
@@ -416,5 +437,31 @@ describe('Admin (e2e)', () => {
         reason: 'should be rejected',
       })
       .expect(400);
+  });
+
+  it('checks Duitku disbursement balance (rejected — disbursement not provisioned on this account)', async () => {
+    const response = await request(app.getHttpServer())
+      .get('/api/v1/admin/duitku/balance')
+      .set('Authorization', `Bearer ${superadminToken}`)
+      .expect(200);
+
+    const body = response.body as {
+      success: boolean;
+      data: { balance: number; response_code: string };
+    };
+    expect(body.success).toBe(false);
+    expect(body.data.response_code).toBe('-120');
+  });
+
+  it('rejects the Duitku balance check for a non-superadmin token', async () => {
+    const affiliateToken = await login(
+      'pending1.e2e@example.com',
+      'super-secret-password',
+    );
+
+    await request(app.getHttpServer())
+      .get('/api/v1/admin/duitku/balance')
+      .set('Authorization', `Bearer ${affiliateToken}`)
+      .expect(403);
   });
 });

@@ -52,6 +52,21 @@ interface DuitkuTransferResponse {
   responseDesc?: string;
 }
 
+interface DuitkuCheckBalanceResponse {
+  balance?: number;
+  effectiveBalance?: number;
+  responseCode: string;
+  responseDesc?: string;
+}
+
+export interface CheckBalanceResult {
+  success: boolean;
+  balance: number | null;
+  effectiveBalance: number | null;
+  responseCode: string;
+  responseDesc: string;
+}
+
 /**
  * Duitku Pop ("createInvoice") is the hosted-checkout-page product — the
  * closest equivalent to Xendit's Invoice API (customer picks a payment
@@ -92,6 +107,7 @@ export class DuitkuService {
   private readonly baseUrl: string;
   private readonly disbursementInquiryUrl: string;
   private readonly disbursementTransferUrl: string;
+  private readonly disbursementCheckBalanceUrl: string;
 
   constructor(private readonly configService: ConfigService) {
     this.merchantCode = this.configService.getOrThrow<string>(
@@ -114,6 +130,12 @@ export class DuitkuService {
     this.disbursementTransferUrl = isProduction
       ? 'https://passport.duitku.com/webapi/api/disbursement/transfer'
       : 'https://sandbox.duitku.com/webapi/api/disbursement/transfersandbox';
+    // Production path is unverified (mirrors inquiry's prod/sandbox host
+    // split, since checkbalance and inquiry share the same host in
+    // sandbox) - only the sandbox call has actually been tested.
+    this.disbursementCheckBalanceUrl = isProduction
+      ? 'https://passport.duitku.com/webapi/api/disbursement/checkbalance'
+      : 'https://sandbox.duitku.com/webapi/api/disbursement/checkbalance';
   }
 
   async createInvoice(
@@ -334,6 +356,48 @@ export class DuitkuService {
     return {
       success: body.responseCode === '00',
       payoutId: params.disburseId,
+      responseCode: body.responseCode,
+      responseDesc: body.responseDesc ?? '',
+    };
+  }
+
+  /**
+   * Checks the merchant's disbursement balance. Real-verified against the
+   * sandbox on 2026-08-26: the request is accepted and parsed correctly
+   * (real balance/effectiveBalance/userId/email fields come back), but
+   * this account's disbursement feature isn't provisioned, so it always
+   * returns `{responseCode: "-120", responseDesc: "User not allowed"}`
+   * with a balance of 0 - same root blocker as createPayout's inquiry and
+   * transfer steps. Will start returning a real balance once disbursement
+   * is activated; nothing else about this endpoint needs to change.
+   */
+  async checkBalance(): Promise<CheckBalanceResult> {
+    const timestamp = Date.now();
+    const userId = this.configService.getOrThrow<string>('DUITKU_USER_ID');
+    const email = this.configService.getOrThrow<string>('DUITKU_EMAIL');
+
+    const signature = createHash('sha256')
+      .update(`${email}${timestamp}${this.apiKey}`)
+      .digest('hex');
+
+    const response = await fetch(this.disbursementCheckBalanceUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userId, email, timestamp, signature }),
+    });
+
+    if (!response.ok) {
+      throw new InternalServerErrorException(
+        `Duitku disbursement checkbalance request failed: HTTP ${response.status}`,
+      );
+    }
+
+    const body = (await response.json()) as DuitkuCheckBalanceResponse;
+
+    return {
+      success: body.responseCode === '00',
+      balance: body.balance ?? null,
+      effectiveBalance: body.effectiveBalance ?? null,
       responseCode: body.responseCode,
       responseDesc: body.responseDesc ?? '',
     };

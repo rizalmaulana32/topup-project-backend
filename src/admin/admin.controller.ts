@@ -20,6 +20,7 @@ import { Roles } from '../auth/roles.decorator';
 import { RolesGuard } from '../auth/roles.guard';
 import { AuthenticatedUser } from '../auth/types/jwt-payload';
 import { ContactService } from '../contact/contact.service';
+import { DuitkuService } from '../duitku/duitku.service';
 import { PROVIDER_TOP_UP_PORT } from '../provider/provider-top-up.port';
 import type { ProviderTopUpPort } from '../provider/provider-top-up.port';
 import { ProductsService } from '../products/products.service';
@@ -52,6 +53,7 @@ export class AdminController {
     private readonly contactService: ContactService,
     @Inject(PROVIDER_TOP_UP_PORT)
     private readonly providerTopUp: ProviderTopUpPort,
+    private readonly duitkuService: DuitkuService,
   ) {}
 
   @Get('affiliates')
@@ -334,6 +336,24 @@ export class AdminController {
   async getProviderBalance() {
     const balance = await this.providerTopUp.getBalance();
     return { success: true, data: { balance } };
+  }
+
+  @Get('duitku/balance')
+  @ApiOperation({
+    summary:
+      "Check the merchant's Duitku disbursement balance (returns a rejection until Duitku activates disbursement on this account)",
+  })
+  async getDuitkuBalance() {
+    const result = await this.duitkuService.checkBalance();
+    return {
+      success: result.success,
+      data: {
+        balance: result.balance,
+        effective_balance: result.effectiveBalance,
+        response_code: result.responseCode,
+        response_desc: result.responseDesc,
+      },
+    };
   }
 
   @Post('provider/coin-transfer')
