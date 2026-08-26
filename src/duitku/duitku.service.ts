@@ -25,8 +25,10 @@ export interface CreatePayoutParams {
 }
 
 export interface CreatePayoutResult {
-  payoutId: string;
-  status: string;
+  success: boolean;
+  payoutId: string | null;
+  responseCode: string;
+  responseDesc: string;
 }
 
 interface DuitkuCreateInvoiceResponse {
@@ -37,12 +39,17 @@ interface DuitkuCreateInvoiceResponse {
   statusMessage: string;
 }
 
-interface DuitkuDisbursementResponse {
+interface DuitkuInquiryResponse {
+  accountName?: string;
+  custRefNumber?: string;
   disburseId?: string;
-  reference?: string;
-  statusCode: string;
-  statusDesc?: string;
-  statusMessage?: string;
+  responseCode: string;
+  responseDesc?: string;
+}
+
+interface DuitkuTransferResponse {
+  responseCode: string;
+  responseDesc?: string;
 }
 
 /**
@@ -51,20 +58,40 @@ interface DuitkuDisbursementResponse {
  * method on a Duitku-hosted page after redirect, rather than the merchant
  * choosing a channel upfront like Duitku's plain V2 API requires).
  *
- * Reference: https://docs.duitku.com/pop/en/ (payment) and
- * https://docs.duitku.com/disbursement/en/ (payout). Duitku's own docs site
- * blocks automated fetches, so these were confirmed via a read-only proxy
- * and Duitku's official Laravel library rather than the primary source —
- * worth re-verifying field-for-field against the real merchant dashboard
- * docs once real credentials exist, especially the disbursement flow,
- * which is documented less consistently than the payment gateway.
+ * createInvoice is real-verified: called against the real sandbox API with
+ * real merchant credentials on 2026-08-26 and got back a genuine HTTP 200,
+ * statusCode "00", a real reference and paymentUrl — every field name and
+ * the signature formula matched on the first try.
+ *
+ * Disbursement (Transfer Online) is a real two-step flow per Duitku's docs
+ * (via a read-only proxy — their docs site blocks automated fetches
+ * directly): POST /inquiry validates the destination account and returns a
+ * disburseId + accountName, then a *separate* POST /transfer (needing that
+ * disburseId/accountName, plus a merchant userId + email inquiry doesn't
+ * need) actually moves the funds — each step has its own signature
+ * formula, and unlike Xendit's Payout, Transfer Online has NO callback at
+ * all (only a different product, "Clearing", does) — the transfer
+ * response IS the final result, which is why createPayout resolves
+ * synchronously rather than returning something to wait on.
+ *
+ * As of 2026-08-26 this account's disbursement feature is not yet
+ * provisioned: both /inquiry and /transfer return the identical
+ * `{responseCode: "-120", responseDesc: "User not found"}` regardless of
+ * what's sent — confirmed with a deliberately invalid signature that
+ * still got the same response instead of a signature error, meaning the
+ * request never reaches per-field validation. This is consistent with the
+ * dashboard's "Akun Duitku Anda belum aktif" banner. Nothing about the
+ * transfer step (field names, userId/email requirement, signature order)
+ * can be verified further until disbursement is actually activated on a
+ * real account.
  */
 @Injectable()
 export class DuitkuService {
   private readonly merchantCode: string;
   private readonly apiKey: string;
   private readonly baseUrl: string;
-  private readonly disbursementBaseUrl: string;
+  private readonly disbursementInquiryUrl: string;
+  private readonly disbursementTransferUrl: string;
 
   constructor(private readonly configService: ConfigService) {
     this.merchantCode = this.configService.getOrThrow<string>(
@@ -77,9 +104,16 @@ export class DuitkuService {
     this.baseUrl = isProduction
       ? 'https://api-prod.duitku.com/api/merchant'
       : 'https://api-sandbox.duitku.com/api/merchant';
-    this.disbursementBaseUrl = isProduction
-      ? 'https://passport.duitku.com/webapi/api/disbursement'
-      : 'https://sandbox.duitku.com/webapi/api/disbursement';
+
+    // Inquiry uses the same path in both environments (confirmed by a real
+    // sandbox call); transfer has a distinct sandbox-only path suffix per
+    // Duitku's docs - the two steps are not symmetric.
+    this.disbursementInquiryUrl = isProduction
+      ? 'https://passport.duitku.com/webapi/api/disbursement/inquiry'
+      : 'https://sandbox.duitku.com/webapi/api/disbursement/inquiry';
+    this.disbursementTransferUrl = isProduction
+      ? 'https://passport.duitku.com/webapi/api/disbursement/transfer'
+      : 'https://sandbox.duitku.com/webapi/api/disbursement/transfersandbox';
   }
 
   async createInvoice(
@@ -149,57 +183,169 @@ export class DuitkuService {
 
   /**
    * Sends a commission withdrawal via Duitku's Disbursement API (Transfer
-   * Online). Requires the disbursement feature to be activated on the
-   * Duitku merchant account — unlike invoice creation, this has not been
-   * exercised against a real account and should be treated as unverified
-   * until it has been.
+   * Online) and resolves synchronously with the final outcome - there is
+   * no callback to wait on for this product (see class doc). Returns a
+   * structured failure instead of throwing for an expected business
+   * outcome (bad account, insufficient funds, inquiry rejected) so the
+   * caller can refund the withdrawal immediately; still throws for a
+   * genuine connectivity/infrastructure error, since that's not a result
+   * the caller should record as a final disbursement outcome.
    */
   async createPayout(params: CreatePayoutParams): Promise<CreatePayoutResult> {
-    const timestamp = Date.now();
     const amount = Math.round(params.amount);
+    const bankCode = deriveDuitkuBankCode(params.bankName);
+    const inquiry = await this.inquireDisbursement({
+      referenceId: params.referenceId,
+      amount,
+      bankCode,
+      accountNumber: params.accountNumber,
+      senderName: params.accountHolder,
+      purpose: params.description,
+    });
+
+    if (!inquiry.success) {
+      return {
+        success: false,
+        payoutId: null,
+        responseCode: inquiry.responseCode,
+        responseDesc: inquiry.responseDesc,
+      };
+    }
+
+    return this.transferDisbursement({
+      disburseId: inquiry.disburseId,
+      accountName: inquiry.accountName,
+      custRefNumber: inquiry.custRefNumber,
+      amount,
+      bankCode,
+      accountNumber: params.accountNumber,
+      purpose: params.description,
+    });
+  }
+
+  private async inquireDisbursement(params: {
+    referenceId: string;
+    amount: number;
+    bankCode: string;
+    accountNumber: string;
+    senderName: string;
+    purpose: string;
+  }): Promise<
+    | {
+        success: true;
+        disburseId: string;
+        accountName: string;
+        custRefNumber: string;
+      }
+    | { success: false; responseCode: string; responseDesc: string }
+  > {
+    const timestamp = Date.now();
     const signature = createHash('sha256')
       .update(
-        `${this.merchantCode}${amount}${params.referenceId}${this.apiKey}`,
+        `${this.merchantCode}${params.amount}${params.referenceId}${this.apiKey}`,
       )
       .digest('hex');
 
-    const response = await fetch(`${this.disbursementBaseUrl}/inquiry`, {
+    const response = await fetch(this.disbursementInquiryUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         merchantCode: this.merchantCode,
         custRefNumber: params.referenceId,
         bankAccount: params.accountNumber,
-        bankCode: deriveDuitkuBankCode(params.bankName),
-        amountTransfer: amount,
-        senderName: params.accountHolder,
-        purpose: params.description,
+        bankCode: params.bankCode,
+        amountTransfer: params.amount,
+        senderName: params.senderName,
+        purpose: params.purpose,
         timestamp,
         signature,
       }),
     });
 
-    const body = (await response.json()) as DuitkuDisbursementResponse;
-
-    if (!response.ok || body.statusCode !== '00') {
+    if (!response.ok) {
       throw new InternalServerErrorException(
-        `Duitku disbursement failed: ${body.statusDesc ?? body.statusMessage ?? response.statusText}`,
+        `Duitku disbursement inquiry request failed: HTTP ${response.status}`,
       );
     }
 
+    const body = (await response.json()) as DuitkuInquiryResponse;
+
+    if (body.responseCode !== '00' || !body.disburseId) {
+      return {
+        success: false,
+        responseCode: body.responseCode,
+        responseDesc: body.responseDesc ?? 'Inquiry rejected',
+      };
+    }
+
     return {
-      payoutId: body.disburseId ?? body.reference ?? params.referenceId,
-      status: body.statusCode,
+      success: true,
+      disburseId: body.disburseId,
+      accountName: body.accountName ?? '',
+      custRefNumber: body.custRefNumber ?? params.referenceId,
+    };
+  }
+
+  private async transferDisbursement(params: {
+    disburseId: string;
+    accountName: string;
+    custRefNumber: string;
+    amount: number;
+    bankCode: string;
+    accountNumber: string;
+    purpose: string;
+  }): Promise<CreatePayoutResult> {
+    const timestamp = Date.now();
+    const userId = this.configService.getOrThrow<string>('DUITKU_USER_ID');
+    const email = this.configService.getOrThrow<string>('DUITKU_EMAIL');
+
+    const signature = createHash('sha256')
+      .update(
+        `${email}${timestamp}${params.bankCode}${params.accountNumber}${params.accountName}${params.custRefNumber}${params.amount}${params.purpose}${params.disburseId}${this.apiKey}`,
+      )
+      .digest('hex');
+
+    const response = await fetch(this.disbursementTransferUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        disburseId: params.disburseId,
+        userId,
+        email,
+        bankCode: params.bankCode,
+        bankAccount: params.accountNumber,
+        amountTransfer: params.amount,
+        accountName: params.accountName,
+        custRefNumber: params.custRefNumber,
+        purpose: params.purpose,
+        timestamp,
+        signature,
+      }),
+    });
+
+    if (!response.ok) {
+      throw new InternalServerErrorException(
+        `Duitku disbursement transfer request failed: HTTP ${response.status}`,
+      );
+    }
+
+    const body = (await response.json()) as DuitkuTransferResponse;
+
+    return {
+      success: body.responseCode === '00',
+      payoutId: params.disburseId,
+      responseCode: body.responseCode,
+      responseDesc: body.responseDesc ?? '',
     };
   }
 
   /**
-   * Verifies a Duitku disbursement callback. The exact signature formula
-   * for disbursement callbacks specifically (as opposed to the create-payout
-   * request) was not clearly documented in what's available without a real
-   * account — this mirrors the create-payout signature scheme as a
-   * best-effort default. Re-verify against the real merchant dashboard
-   * once disbursement is activated.
+   * Verifies a Duitku disbursement callback signature. Not used by the
+   * Transfer Online flow this app currently uses (it has no callback at
+   * all - createPayout resolves synchronously); kept for the "Clearing"
+   * disbursement product, which does have a documented callback, in case
+   * this app ever needs it. The exact signature formula shown here is a
+   * best-effort default, not yet confirmed against a real account.
    */
   verifyDisbursementCallbackSignature(params: {
     referenceId: string;

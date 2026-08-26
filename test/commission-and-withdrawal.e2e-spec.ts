@@ -33,6 +33,11 @@ import { DuitkuService } from '../src/duitku/duitku.service';
  */
 const TEST_SIGNATURE = 'e2e-test-signature';
 
+// Duitku's real Transfer Online disbursement resolves synchronously (no
+// callback - see DuitkuService), so the fake needs a way for a specific
+// test to force a failure result without a separate webhook call.
+const failingPayoutReferenceIds = new Set<string>();
+
 class FakeDuitkuService {
   createInvoice(params: { externalId: string }) {
     return Promise.resolve({
@@ -43,9 +48,19 @@ class FakeDuitkuService {
   }
 
   createPayout(params: { referenceId: string }) {
+    if (failingPayoutReferenceIds.has(params.referenceId)) {
+      return Promise.resolve({
+        success: false,
+        payoutId: null,
+        responseCode: '01',
+        responseDesc: 'Insufficient funds',
+      });
+    }
     return Promise.resolve({
+      success: true,
       payoutId: `fake-payout-${params.referenceId}`,
-      status: '00',
+      responseCode: '00',
+      responseDesc: 'Success',
     });
   }
 
@@ -269,7 +284,7 @@ describe('Commission crediting and withdrawal (e2e)', () => {
       .expect(400);
   });
 
-  it('completes a withdrawal via admin approval and a successful Duitku callback', async () => {
+  it('completes a withdrawal immediately on admin approval (Duitku Transfer Online has no callback)', async () => {
     const pending = await withdrawalRepository.findOneOrFail({
       where: {
         affiliatorId: affiliateProfileId,
@@ -284,21 +299,10 @@ describe('Commission crediting and withdrawal (e2e)', () => {
     const approveBody = approveResponse.body as {
       data: { status: string; duitku_disbursement_id: string };
     };
-    expect(approveBody.data.status).toBe(WithdrawalStatus.APPROVED);
+    expect(approveBody.data.status).toBe(WithdrawalStatus.PAID);
     expect(approveBody.data.duitku_disbursement_id).toBe(
       `fake-payout-${pending.id}`,
     );
-
-    await request(app.getHttpServer())
-      .post('/api/v1/webhooks/duitku/disbursement')
-      .type('form')
-      .send({
-        custRefNumber: pending.id,
-        amount: '100000',
-        statusCode: '00',
-        signature: TEST_SIGNATURE,
-      })
-      .expect(200);
 
     const paid = await withdrawalRepository.findOneOrFail({
       where: { id: pending.id },
@@ -306,7 +310,7 @@ describe('Commission crediting and withdrawal (e2e)', () => {
     expect(paid.status).toBe(WithdrawalStatus.PAID);
 
     // Balance stays at 100000 — the debit was already recorded at request
-    // time; a success callback does not touch the balance further.
+    // time; a successful disbursement does not touch the balance further.
     const profile = await profileRepository.findOneOrFail({
       where: { id: affiliateProfileId },
     });
@@ -345,27 +349,19 @@ describe('Commission crediting and withdrawal (e2e)', () => {
       data: { withdrawal_id: string };
     };
     const withdrawalId = requestBody.data.withdrawal_id;
+    failingPayoutReferenceIds.add(withdrawalId);
 
     const balanceAfterLock = await profileRepository.findOneOrFail({
       where: { id: affiliateProfileId },
     });
     expect(balanceAfterLock.commissionBalance).toBe('50000.00');
 
-    await request(app.getHttpServer())
+    const approveResponse = await request(app.getHttpServer())
       .post(`/api/v1/admin/withdrawals/${withdrawalId}/approve`)
       .set('Authorization', `Bearer ${superadminToken}`)
       .expect(201);
-
-    await request(app.getHttpServer())
-      .post('/api/v1/webhooks/duitku/disbursement')
-      .type('form')
-      .send({
-        custRefNumber: withdrawalId,
-        amount: '50000',
-        statusCode: '01',
-        signature: TEST_SIGNATURE,
-      })
-      .expect(200);
+    const approveBody = approveResponse.body as { data: { status: string } };
+    expect(approveBody.data.status).toBe(WithdrawalStatus.FAILED);
 
     const failed = await withdrawalRepository.findOneOrFail({
       where: { id: withdrawalId },

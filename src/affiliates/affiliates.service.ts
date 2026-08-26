@@ -357,6 +357,15 @@ export class AffiliatesService {
     return withdrawal;
   }
 
+  /**
+   * Approves a withdrawal and sends it to Duitku. Unlike the old
+   * Xendit Payout flow, Duitku's Transfer Online has no callback - the
+   * disbursement call itself resolves synchronously with the final
+   * outcome, so this method knows immediately whether the withdrawal was
+   * actually paid and updates its status right away (PAID or, on
+   * failure, FAILED-with-refund) instead of parking it in `approved` to
+   * wait for a webhook that will never arrive.
+   */
   async approveWithdrawal(
     withdrawalId: string,
     adminUserId: string,
@@ -378,12 +387,21 @@ export class AffiliatesService {
       description: `Commission withdrawal ${withdrawal.id}`,
     });
 
-    withdrawal.status = WithdrawalStatus.APPROVED;
     withdrawal.duitkuDisbursementId = payout.payoutId;
     withdrawal.processedBy = adminUserId;
     withdrawal.processedAt = new Date();
 
-    return this.withdrawalRepository.save(withdrawal);
+    if (payout.success) {
+      withdrawal.status = WithdrawalStatus.PAID;
+      return this.withdrawalRepository.save(withdrawal);
+    }
+
+    await this.withdrawalRepository.save(withdrawal);
+    await this.refundFailedWithdrawal(
+      withdrawal,
+      `Duitku disbursement failed: ${payout.responseDesc} (${payout.responseCode})`,
+    );
+    return this.findWithdrawalByIdOrFail(withdrawalId);
   }
 
   /**
@@ -452,15 +470,13 @@ export class AffiliatesService {
   }
 
   /**
-   * Called by the Duitku disbursement callback controller after the
-   * signature has already been verified. Idempotent: a withdrawal not in
-   * `approved` status is ignored (already handled or never sent).
-   *
-   * Duitku disbursement statusCode: '00' = success, '01' = failed, other
-   * codes (e.g. '68' = still processing) are treated as non-final and
-   * ignored rather than refunded - only a confirmed failure should unlock
-   * the balance. This mapping is a best-effort default pending
-   * confirmation against a real Duitku account (see DuitkuService).
+   * Called by the Duitku disbursement callback controller. Not reachable
+   * in practice for the Transfer Online flow this app currently uses (it
+   * has no callback - approveWithdrawal resolves the outcome synchronously
+   * and calls refundFailedWithdrawal directly on failure). Kept for the
+   * "Clearing" disbursement product, which does have a documented
+   * callback, in case this app ever needs it. Idempotent: a withdrawal not
+   * in `approved` status is ignored (already handled, or never sent).
    */
   async handleDisbursementCallback(
     referenceId: string,
@@ -496,7 +512,21 @@ export class AffiliatesService {
       return;
     }
 
-    // '01' (failed): refund.
+    await this.refundFailedWithdrawal(
+      withdrawal,
+      `Duitku disbursement failed (Duitku status: ${duitkuStatusCode})`,
+    );
+  }
+
+  /**
+   * Refunds a withdrawal's locked balance and marks it FAILED. Shared by
+   * approveWithdrawal (the synchronous Transfer Online failure path) and
+   * handleDisbursementCallback (the Clearing-callback path).
+   */
+  private async refundFailedWithdrawal(
+    withdrawal: CommissionWithdrawal,
+    description: string,
+  ): Promise<void> {
     const queryRunner = this.dataSource.createQueryRunner();
     await queryRunner.connect();
     await queryRunner.startTransaction();
@@ -524,7 +554,7 @@ export class AffiliatesService {
         type: CommissionLogType.CREDIT,
         amount: withdrawal.amount,
         balanceAfter: refundedBalance.toFixed(2),
-        description: `Refund for failed withdrawal ${withdrawal.id} (Duitku status: ${duitkuStatusCode})`,
+        description,
       });
       await queryRunner.manager.save(log);
 
