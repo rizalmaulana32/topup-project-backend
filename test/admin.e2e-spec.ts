@@ -363,4 +363,58 @@ describe('Admin (e2e)', () => {
     expect(Array.isArray(body.data.items)).toBe(true);
     expect(body.data.total).toBe(0);
   });
+
+  it("returns the provider's mock coin balance", async () => {
+    const response = await request(app.getHttpServer())
+      .get('/api/v1/admin/provider/balance')
+      .set('Authorization', `Bearer ${superadminToken}`)
+      .expect(200);
+
+    const body = response.body as { data: { balance: number } };
+    expect(typeof body.data.balance).toBe('number');
+  });
+
+  it('rejects the provider balance check for a non-superadmin token', async () => {
+    const affiliateToken = await login(
+      'pending1.e2e@example.com',
+      'super-secret-password',
+    );
+
+    await request(app.getHttpServer())
+      .get('/api/v1/admin/provider/balance')
+      .set('Authorization', `Bearer ${affiliateToken}`)
+      .expect(403);
+  });
+
+  it('manually transfers coin via the provider for a support/compensation case', async () => {
+    const response = await request(app.getHttpServer())
+      .post('/api/v1/admin/provider/coin-transfer')
+      .set('Authorization', `Bearer ${superadminToken}`)
+      .send({
+        target_user_id: '1000007',
+        coin: 50,
+        reason: 'e2e test - manual compensation credit',
+      })
+      .expect(201);
+
+    const body = response.body as {
+      success: boolean;
+      data: { target_user_id: string; coin: number };
+    };
+    expect(body.success).toBe(true);
+    expect(body.data.target_user_id).toBe('1000007');
+    expect(body.data.coin).toBe(50);
+  });
+
+  it('rejects a manual coin transfer with a non-positive coin amount', async () => {
+    await request(app.getHttpServer())
+      .post('/api/v1/admin/provider/coin-transfer')
+      .set('Authorization', `Bearer ${superadminToken}`)
+      .send({
+        target_user_id: '1000007',
+        coin: 0,
+        reason: 'should be rejected',
+      })
+      .expect(400);
+  });
 });

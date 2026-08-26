@@ -3,6 +3,8 @@ import {
   Controller,
   Delete,
   Get,
+  Inject,
+  Logger,
   Param,
   Patch,
   Post,
@@ -18,6 +20,8 @@ import { Roles } from '../auth/roles.decorator';
 import { RolesGuard } from '../auth/roles.guard';
 import { AuthenticatedUser } from '../auth/types/jwt-payload';
 import { ContactService } from '../contact/contact.service';
+import { PROVIDER_TOP_UP_PORT } from '../provider/provider-top-up.port';
+import type { ProviderTopUpPort } from '../provider/provider-top-up.port';
 import { ProductsService } from '../products/products.service';
 import { SettingsService } from '../settings/settings.service';
 import { TransactionsService } from '../transactions/transactions.service';
@@ -27,6 +31,7 @@ import { ListAffiliatesDto } from './dto/list-affiliates.dto';
 import { ListContactMessagesDto } from './dto/list-contact-messages.dto';
 import { ListTransactionsDto } from './dto/list-transactions.dto';
 import { ListWithdrawalsDto } from './dto/list-withdrawals.dto';
+import { ProviderCoinTransferDto } from './dto/provider-coin-transfer.dto';
 import { UpdateCommissionRateDto } from './dto/update-commission-rate.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
 import { UpdateSettingsDto } from './dto/update-settings.dto';
@@ -37,12 +42,16 @@ import { UpdateSettingsDto } from './dto/update-settings.dto';
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Roles(UserRole.SUPERADMIN)
 export class AdminController {
+  private readonly logger = new Logger(AdminController.name);
+
   constructor(
     private readonly affiliatesService: AffiliatesService,
     private readonly settingsService: SettingsService,
     private readonly productsService: ProductsService,
     private readonly transactionsService: TransactionsService,
     private readonly contactService: ContactService,
+    @Inject(PROVIDER_TOP_UP_PORT)
+    private readonly providerTopUp: ProviderTopUpPort,
   ) {}
 
   @Get('affiliates')
@@ -315,5 +324,45 @@ export class AdminController {
   async deleteContactMessage(@Param('id') id: string) {
     await this.contactService.softDelete(id);
     return { success: true };
+  }
+
+  @Get('provider/balance')
+  @ApiOperation({
+    summary:
+      "Check the merchant's remaining coin balance with the Provider Top-Up vendor",
+  })
+  async getProviderBalance() {
+    const balance = await this.providerTopUp.getBalance();
+    return { success: true, data: { balance } };
+  }
+
+  @Post('provider/coin-transfer')
+  @ApiOperation({
+    summary:
+      'Manually transfer coins to a player via the Provider Top-Up vendor (support/compensation use only, bypasses payment)',
+  })
+  async transferProviderCoin(
+    @Body() dto: ProviderCoinTransferDto,
+    @Req() request: Request & { user: AuthenticatedUser },
+  ) {
+    this.logger.warn(
+      `Manual coin transfer by admin ${request.user.id}: ${dto.coin} coin(s) to target_user_id=${dto.target_user_id} target_zone_id=${dto.target_zone_id ?? 'none'} - reason: ${dto.reason}`,
+    );
+
+    const result = await this.providerTopUp.injectCoin({
+      productProviderCode: 'ADMIN_MANUAL_TRANSFER',
+      targetUserId: dto.target_user_id,
+      targetZoneId: dto.target_zone_id,
+      coin: dto.coin,
+    });
+
+    return {
+      success: result.success,
+      data: {
+        target_user_id: dto.target_user_id,
+        coin: dto.coin,
+        provider_response: result.response,
+      },
+    };
   }
 }

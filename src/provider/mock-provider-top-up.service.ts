@@ -7,11 +7,10 @@ import {
 } from './provider-top-up.port';
 
 /**
- * Deterministic stand-in for the real Provider Top-Up vendor (undecided —
- * see dev-doc/topup-affiliate-platform/project-charter.md). Any non-empty
- * target ID resolves successfully; injectCoin always succeeds. Replace with
- * a real HTTP-backed implementation of ProviderTopUpPort once a vendor is
- * chosen.
+ * Deterministic stand-in for the real Provider Top-Up vendor (MomoLive —
+ * see MomoProviderTopUpService). Any non-empty target ID resolves
+ * successfully; injectCoin always succeeds; getBalance returns a fixed
+ * fake number. Used whenever PROVIDER_TOP_UP_VENDOR isn't set to "momo".
  */
 @Injectable()
 export class MockProviderTopUpService implements ProviderTopUpPort {
@@ -42,5 +41,9 @@ export class MockProviderTopUpService implements ProviderTopUpPort {
         injectedAt: new Date().toISOString(),
       }),
     });
+  }
+
+  getBalance(): Promise<number> {
+    return Promise.resolve(999999999);
   }
 }

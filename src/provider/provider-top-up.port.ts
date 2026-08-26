@@ -33,4 +33,12 @@ export interface ProviderTopUpPort {
   ): Promise<CheckIdResult>;
 
   injectCoin(params: InjectCoinParams): Promise<InjectCoinResult>;
+
+  /**
+   * The merchant's own remaining coin balance with the provider - not
+   * customer-facing, exposed only via the superadmin monitoring endpoint
+   * (GET /admin/provider/balance) so injectCoin failures caused by running
+   * out of balance on the provider's side can be caught before they pile up.
+   */
+  getBalance(): Promise<number>;
 }
