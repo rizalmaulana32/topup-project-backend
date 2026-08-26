@@ -174,6 +174,7 @@ describe('TopupService', () => {
         productProviderCode: 'ml_120',
         targetUserId: '1',
         targetZoneId: '99',
+        coin: 120,
       });
       expect(transactionsService.markProviderResult).toHaveBeenCalledWith(
         'TRX-20260805-0001',

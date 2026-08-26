@@ -137,6 +137,9 @@ export class TopupService {
       productProviderCode: transaction.product.providerCode,
       targetUserId: transaction.targetUserId,
       targetZoneId: transaction.targetZoneId,
+      coin:
+        Number(transaction.product.coinAmount) +
+        Number(transaction.product.bonusCoin),
     });
 
     await this.transactionsService.markProviderResult(transaction.id, {

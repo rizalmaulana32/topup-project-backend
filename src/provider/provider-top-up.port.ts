@@ -8,6 +8,7 @@ export interface InjectCoinParams {
   productProviderCode: string;
   targetUserId: string;
   targetZoneId?: string | null;
+  coin: number;
 }
 
 export interface InjectCoinResult {
@@ -16,10 +17,13 @@ export interface InjectCoinResult {
 }
 
 /**
- * Swappable boundary for the Provider Top-Up vendor. The real vendor is not
- * yet chosen (dev-doc/topup-affiliate-platform/project-charter.md), so
- * MockProviderTopUpService is bound to this token for now. A future slice
- * can bind a real implementation without touching any calling code.
+ * Swappable boundary for the Provider Top-Up vendor. The real vendor is
+ * MomoLive (dev-doc/API Terbuka Pedagang Koin MomoLive(1).md) - bound via
+ * MomoProviderTopUpService in production, with MockProviderTopUpService
+ * available for local dev/testing without real credentials. MomoLive's
+ * real API has no game_code/zone concept (it's a single platform, not a
+ * multi-game abstraction) - a real implementation just ignores those two
+ * params rather than the interface needing to drop them.
  */
 export interface ProviderTopUpPort {
   checkId(

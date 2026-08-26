@@ -38,6 +38,7 @@ export class MockProviderTopUpService implements ProviderTopUpPort {
         providerCode: params.productProviderCode,
         targetUserId: params.targetUserId,
         targetZoneId: params.targetZoneId ?? null,
+        coin: params.coin,
         injectedAt: new Date().toISOString(),
       }),
     });
