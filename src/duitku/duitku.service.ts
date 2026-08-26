@@ -370,11 +370,22 @@ export class DuitkuService {
    * with a balance of 0 - same root blocker as createPayout's inquiry and
    * transfer steps. Will start returning a real balance once disbursement
    * is activated; nothing else about this endpoint needs to change.
+   *
+   * Unlike transferDisbursement (a real money-moving call that must fail
+   * loudly if DUITKU_USER_ID/DUITKU_EMAIL are missing), this falls back to
+   * placeholders when they're not set - the client hasn't located the real
+   * values yet, and Duitku rejects every checkbalance call identically
+   * regardless of what userId/email is sent while disbursement isn't
+   * provisioned (verified with a deliberately fake email), so a missing
+   * config here shouldn't crash a read-only monitoring endpoint.
    */
   async checkBalance(): Promise<CheckBalanceResult> {
     const timestamp = Date.now();
-    const userId = this.configService.getOrThrow<string>('DUITKU_USER_ID');
-    const email = this.configService.getOrThrow<string>('DUITKU_EMAIL');
+    const userId = this.configService.get<string>('DUITKU_USER_ID', 'unknown');
+    const email = this.configService.get<string>(
+      'DUITKU_EMAIL',
+      'unknown@example.com',
+    );
 
     const signature = createHash('sha256')
       .update(`${email}${timestamp}${this.apiKey}`)
