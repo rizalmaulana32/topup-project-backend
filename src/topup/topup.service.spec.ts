@@ -34,7 +34,10 @@ describe('TopupService', () => {
     >
   >;
   let duitkuService: jest.Mocked<
-    Pick<DuitkuService, 'createInvoice' | 'checkTransactionStatus'>
+    Pick<
+      DuitkuService,
+      'createInvoice' | 'checkTransactionStatus' | 'getPaymentMethods'
+    >
   >;
   let creditCommissionMock: jest.Mock;
   let affiliatesService: jest.Mocked<
@@ -81,6 +84,7 @@ describe('TopupService', () => {
     duitkuService = {
       createInvoice: jest.fn(),
       checkTransactionStatus: jest.fn(),
+      getPaymentMethods: jest.fn(),
     };
     creditCommissionMock = jest.fn().mockResolvedValue('0.00');
     affiliatesService = {
@@ -190,6 +194,32 @@ describe('TopupService', () => {
 
       expect(result.admin_fee).toBeNull();
       expect(result.transaction_id).toBe('TRX-20260805-0003');
+    });
+  });
+
+  describe('getPaymentMethodsForProduct', () => {
+    it("looks up the product's own selling price, never a client-supplied amount", async () => {
+      productsService.findActiveByIdOrFail.mockResolvedValue(product);
+      duitkuService.getPaymentMethods.mockResolvedValue([
+        {
+          paymentMethod: 'BC',
+          paymentName: 'BCA VA',
+          paymentImage: 'https://images.duitku.com/hotlink-ok/BCA.SVG',
+          totalFee: '5000',
+        },
+      ]);
+
+      const result = await service.getPaymentMethodsForProduct('1');
+
+      expect(duitkuService.getPaymentMethods).toHaveBeenCalledWith(20000);
+      expect(result).toEqual([
+        {
+          payment_method: 'BC',
+          payment_name: 'BCA VA',
+          payment_image: 'https://images.duitku.com/hotlink-ok/BCA.SVG',
+          total_fee: '5000',
+        },
+      ]);
     });
   });
 

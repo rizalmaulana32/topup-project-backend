@@ -54,6 +54,24 @@ export interface TransactionStatusResult {
   fee: string | null;
 }
 
+interface DuitkuPaymentMethodResponse {
+  paymentFee: {
+    paymentMethod: string;
+    paymentName: string;
+    paymentImage: string;
+    totalFee: string;
+  }[];
+  responseCode: string;
+  responseMessage: string;
+}
+
+export interface PaymentMethodFee {
+  paymentMethod: string;
+  paymentName: string;
+  paymentImage: string;
+  totalFee: string;
+}
+
 interface DuitkuInquiryResponse {
   accountName?: string;
   custRefNumber?: string;
@@ -123,6 +141,7 @@ export class DuitkuService {
   private readonly disbursementInquiryUrl: string;
   private readonly disbursementTransferUrl: string;
   private readonly disbursementCheckBalanceUrl: string;
+  private readonly paymentMethodUrl: string;
 
   constructor(private readonly configService: ConfigService) {
     this.merchantCode = this.configService.getOrThrow<string>(
@@ -151,6 +170,11 @@ export class DuitkuService {
     this.disbursementCheckBalanceUrl = isProduction
       ? 'https://passport.duitku.com/webapi/api/disbursement/checkbalance'
       : 'https://sandbox.duitku.com/webapi/api/disbursement/checkbalance';
+    // Same "webapi" host family as disbursement, not the createInvoice
+    // host - confirmed for real against the sandbox on 2026-08-31.
+    this.paymentMethodUrl = isProduction
+      ? 'https://passport.duitku.com/webapi/api/merchant/paymentmethod/getpaymentmethod'
+      : 'https://sandbox.duitku.com/webapi/api/merchant/paymentmethod/getpaymentmethod';
   }
 
   async createInvoice(
@@ -237,6 +261,55 @@ export class DuitkuService {
       statusMessage: body.statusMessage,
       fee: body.fee ?? null,
     };
+  }
+
+  /**
+   * Lists every payment method available for a given amount, each with its
+   * own fee - the actual answer to "what's the admin fee" *before*
+   * checkout, since it varies per channel (VA vs QRIS vs e-wallet) and
+   * checkTransactionStatus only knows the fee after a payment already
+   * happened. Real-verified against the sandbox on 2026-08-31: real HTTP
+   * 200, responseCode "00", the exact documented field names, on the
+   * first try. One real caveat found the same way: every totalFee in
+   * sandbox comes back "0" regardless of amount or channel - Duitku's
+   * sandbox doesn't simulate real fee variation (checkTransactionStatus's
+   * real "5000.00" fee on an actually-paid sandbox transaction confirms
+   * fees are real on this account, just not previewable pre-checkout in
+   * sandbox). Real, varying fees should appear once production
+   * credentials are used.
+   */
+  async getPaymentMethods(amount: number): Promise<PaymentMethodFee[]> {
+    const datetime = formatDuitkuDatetime(new Date());
+    const signature = createHash('sha256')
+      .update(`${this.merchantCode}${amount}${datetime}${this.apiKey}`)
+      .digest('hex');
+
+    const response = await fetch(this.paymentMethodUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        merchantCode: this.merchantCode,
+        amount,
+        datetime,
+        signature,
+      }),
+    });
+
+    if (!response.ok) {
+      throw new InternalServerErrorException(
+        `Duitku getPaymentMethod request failed: HTTP ${response.status}`,
+      );
+    }
+
+    const body = (await response.json()) as DuitkuPaymentMethodResponse;
+
+    if (body.responseCode !== '00') {
+      throw new InternalServerErrorException(
+        `Duitku getPaymentMethod failed: ${body.responseMessage} (code ${body.responseCode})`,
+      );
+    }
+
+    return body.paymentFee;
   }
 
   /**
@@ -522,4 +595,13 @@ function deriveDuitkuBankCode(bankName: string): string {
   throw new InternalServerErrorException(
     `No Duitku bank code mapping configured for "${bankName}" - Duitku uses its own bank code list (unlike Xendit's derivable ID_<BANK> convention), which needs to be sourced from Duitku's real getBankList/documentation and mapped explicitly before disbursement can work.`,
   );
+}
+
+/**
+ * "Y-m-d H:i:s" per Duitku's official PHP SDK (PHP's date() default
+ * timezone), used only for getPaymentMethod's signature. Real-verified
+ * against the sandbox on 2026-08-31 using this exact UTC-based format.
+ */
+function formatDuitkuDatetime(date: Date): string {
+  return date.toISOString().slice(0, 19).replace('T', ' ');
 }

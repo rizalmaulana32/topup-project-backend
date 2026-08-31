@@ -16,6 +16,16 @@ export class TopupController {
     return { success: true, data };
   }
 
+  @Get('products/:id/payment-methods')
+  @ApiOperation({
+    summary:
+      "List payment methods and their fees for a product's selling price, before checkout",
+  })
+  async getPaymentMethods(@Param('id') id: string) {
+    const data = await this.topupService.getPaymentMethodsForProduct(id);
+    return { success: true, data };
+  }
+
   @Post('check-id')
   @ApiOperation({ summary: 'Validate a target game/user ID before checkout' })
   async checkId(@Body() dto: CheckIdDto) {

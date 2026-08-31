@@ -42,6 +42,25 @@ export class TopupService {
     }));
   }
 
+  /**
+   * Lists payment methods and their fees for a product's selling price -
+   * the amount is looked up server-side from the product, never trusted
+   * from the client, matching checkout()'s own trust boundary.
+   */
+  async getPaymentMethodsForProduct(productId: string) {
+    const product = await this.productsService.findActiveByIdOrFail(productId);
+    const methods = await this.duitkuService.getPaymentMethods(
+      Number(product.sellingPrice),
+    );
+
+    return methods.map((method) => ({
+      payment_method: method.paymentMethod,
+      payment_name: method.paymentName,
+      payment_image: method.paymentImage,
+      total_fee: method.totalFee,
+    }));
+  }
+
   async getTransactionStatus(transactionId: string) {
     const transaction =
       await this.transactionsService.findByExternalId(transactionId);
