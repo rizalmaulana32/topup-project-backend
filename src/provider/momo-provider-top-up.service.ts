@@ -84,7 +84,7 @@ export class MomoProviderTopUpService implements ProviderTopUpPort {
       user_id: toMomoUserId(targetUserId),
     });
 
-    return { username: result.nick_name };
+    return { username: result.nick_name, avatarUrl: result.avatar };
   }
 
   async injectCoin(params: InjectCoinParams): Promise<InjectCoinResult> {

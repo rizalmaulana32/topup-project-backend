@@ -108,6 +108,7 @@ describe('Topup (e2e)', () => {
       success: true,
       data: {
         username: 'Player_12345678#1234',
+        avatar_url: null,
         user_id: '12345678',
         zone_id: '1234',
       },

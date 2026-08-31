@@ -33,7 +33,9 @@ describe('TopupService', () => {
       | 'markProviderResult'
     >
   >;
-  let duitkuService: jest.Mocked<Pick<DuitkuService, 'createInvoice'>>;
+  let duitkuService: jest.Mocked<
+    Pick<DuitkuService, 'createInvoice' | 'checkTransactionStatus'>
+  >;
   let creditCommissionMock: jest.Mock;
   let affiliatesService: jest.Mocked<
     Pick<AffiliatesService, 'creditCommissionForTransaction'>
@@ -76,7 +78,10 @@ describe('TopupService', () => {
       markFailed: jest.fn(),
       markProviderResult: jest.fn(),
     };
-    duitkuService = { createInvoice: jest.fn() };
+    duitkuService = {
+      createInvoice: jest.fn(),
+      checkTransactionStatus: jest.fn(),
+    };
     creditCommissionMock = jest.fn().mockResolvedValue('0.00');
     affiliatesService = {
       creditCommissionForTransaction: creditCommissionMock,
@@ -97,8 +102,11 @@ describe('TopupService', () => {
   });
 
   describe('checkId', () => {
-    it('delegates to the provider and echoes the request identifiers', async () => {
-      checkIdMock.mockResolvedValue({ username: 'Player_1' });
+    it('delegates to the provider and echoes the request identifiers, including the avatar', async () => {
+      checkIdMock.mockResolvedValue({
+        username: 'Player_1',
+        avatarUrl: 'https://example.com/avatar.png',
+      });
 
       const result = await service.checkId({
         game_code: 'mobile_legends',
@@ -109,9 +117,79 @@ describe('TopupService', () => {
       expect(checkIdMock).toHaveBeenCalledWith('mobile_legends', '1', '99');
       expect(result).toEqual({
         username: 'Player_1',
+        avatar_url: 'https://example.com/avatar.png',
         user_id: '1',
         zone_id: '99',
       });
+    });
+  });
+
+  describe('getTransactionStatus', () => {
+    it('includes the Duitku fee for a transaction with a duitku_reference', async () => {
+      transactionsService.findByExternalId.mockResolvedValue({
+        id: 'TRX-20260805-0001',
+        paymentStatus: PaymentStatus.PAID,
+        providerStatus: null,
+        duitkuReference: 'DS3460326ABC',
+        grossAmount: '10000.00',
+        product: null,
+        createdAt: new Date(),
+        paidAt: new Date(),
+        completedAt: new Date(),
+      } as any);
+      duitkuService.checkTransactionStatus.mockResolvedValue({
+        statusCode: '00',
+        statusMessage: 'SUCCESS',
+        fee: '5000.00',
+      });
+
+      const result = await service.getTransactionStatus('TRX-20260805-0001');
+
+      expect(duitkuService.checkTransactionStatus).toHaveBeenCalledWith(
+        'TRX-20260805-0001',
+      );
+      expect(result.admin_fee).toBe('5000.00');
+    });
+
+    it('does not call Duitku and returns a null fee for a transaction with no duitku_reference', async () => {
+      transactionsService.findByExternalId.mockResolvedValue({
+        id: 'TRX-20260805-0002',
+        paymentStatus: PaymentStatus.PENDING,
+        providerStatus: null,
+        duitkuReference: null,
+        grossAmount: '10000.00',
+        product: null,
+        createdAt: new Date(),
+        paidAt: null,
+        completedAt: null,
+      } as any);
+
+      const result = await service.getTransactionStatus('TRX-20260805-0002');
+
+      expect(duitkuService.checkTransactionStatus).not.toHaveBeenCalled();
+      expect(result.admin_fee).toBeNull();
+    });
+
+    it('degrades gracefully to a null fee if the Duitku fee lookup fails', async () => {
+      transactionsService.findByExternalId.mockResolvedValue({
+        id: 'TRX-20260805-0003',
+        paymentStatus: PaymentStatus.PAID,
+        providerStatus: null,
+        duitkuReference: 'DS3460326DEF',
+        grossAmount: '10000.00',
+        product: null,
+        createdAt: new Date(),
+        paidAt: new Date(),
+        completedAt: new Date(),
+      } as any);
+      duitkuService.checkTransactionStatus.mockRejectedValue(
+        new Error('Duitku transactionStatus request failed: HTTP 500'),
+      );
+
+      const result = await service.getTransactionStatus('TRX-20260805-0003');
+
+      expect(result.admin_fee).toBeNull();
+      expect(result.transaction_id).toBe('TRX-20260805-0003');
     });
   });
 

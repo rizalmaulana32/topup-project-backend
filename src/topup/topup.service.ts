@@ -50,12 +50,30 @@ export class TopupService {
       throw new NotFoundException(`Transaction ${transactionId} not found`);
     }
 
+    let adminFee: string | null = null;
+    if (transaction.duitkuReference) {
+      try {
+        const status = await this.duitkuService.checkTransactionStatus(
+          transaction.id,
+        );
+        adminFee = status.fee;
+      } catch (error) {
+        // Fee is supplementary display info, not core to status-checking -
+        // degrade gracefully rather than fail the whole lookup if Duitku's
+        // transactionStatus call has trouble.
+        this.logger.warn(
+          `Could not fetch Duitku fee for ${transactionId}: ${error instanceof Error ? error.message : 'unknown error'}`,
+        );
+      }
+    }
+
     return {
       transaction_id: transaction.id,
       payment_status: transaction.paymentStatus,
       provider_status: transaction.providerStatus,
       product_name: transaction.product?.name ?? null,
       gross_amount: transaction.grossAmount,
+      admin_fee: adminFee,
       created_at: transaction.createdAt,
       paid_at: transaction.paidAt,
       completed_at: transaction.completedAt,
@@ -71,6 +89,7 @@ export class TopupService {
 
     return {
       username: result.username,
+      avatar_url: result.avatarUrl,
       user_id: dto.user_id,
       zone_id: dto.zone_id,
     };

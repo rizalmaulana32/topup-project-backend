@@ -26,6 +26,7 @@ export class MockProviderTopUpService implements ProviderTopUpPort {
     const zoneSuffix = targetZoneId ? `#${targetZoneId}` : '';
     return Promise.resolve({
       username: `Player_${targetUserId}${zoneSuffix}`,
+      avatarUrl: null,
     });
   }
 

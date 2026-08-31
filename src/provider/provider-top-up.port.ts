@@ -2,6 +2,7 @@ export const PROVIDER_TOP_UP_PORT = Symbol('PROVIDER_TOP_UP_PORT');
 
 export interface CheckIdResult {
   username: string;
+  avatarUrl: string | null;
 }
 
 export interface InjectCoinParams {

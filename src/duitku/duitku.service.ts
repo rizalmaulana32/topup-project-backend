@@ -39,6 +39,21 @@ interface DuitkuCreateInvoiceResponse {
   statusMessage: string;
 }
 
+interface DuitkuTransactionStatusResponse {
+  merchantOrderId: string;
+  reference?: string;
+  amount?: string;
+  fee?: string;
+  statusCode: string;
+  statusMessage: string;
+}
+
+export interface TransactionStatusResult {
+  statusCode: string;
+  statusMessage: string;
+  fee: string | null;
+}
+
 interface DuitkuInquiryResponse {
   accountName?: string;
   custRefNumber?: string;
@@ -178,6 +193,49 @@ export class DuitkuService {
       invoiceId: body.reference,
       invoiceUrl: body.paymentUrl,
       status: body.statusCode,
+    };
+  }
+
+  /**
+   * Checks a transaction's real-time status directly with Duitku, mainly
+   * to surface `fee` (Duitku's own transaction fee, e.g. a flat VA fee) -
+   * something createInvoice's response never includes and only becomes
+   * known once Duitku has actually processed the payment. Real-verified
+   * against the sandbox on 2026-08-31 against a real paid transaction:
+   * returned a genuine fee ("5000.00" on a 10000 transaction). Per
+   * Duitku's official PHP SDK (duitku-php's Pop::transactionStatus, not
+   * the createInvoice signature scheme): MD5, not SHA256, over
+   * merchantCode + merchantOrderId + apiKey.
+   */
+  async checkTransactionStatus(
+    merchantOrderId: string,
+  ): Promise<TransactionStatusResult> {
+    const signature = createHash('md5')
+      .update(`${this.merchantCode}${merchantOrderId}${this.apiKey}`)
+      .digest('hex');
+
+    const response = await fetch(`${this.baseUrl}/transactionStatus`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        merchantCode: this.merchantCode,
+        merchantOrderId,
+        signature,
+      }),
+    });
+
+    if (!response.ok) {
+      throw new InternalServerErrorException(
+        `Duitku transactionStatus request failed: HTTP ${response.status}`,
+      );
+    }
+
+    const body = (await response.json()) as DuitkuTransactionStatusResponse;
+
+    return {
+      statusCode: body.statusCode,
+      statusMessage: body.statusMessage,
+      fee: body.fee ?? null,
     };
   }
 
