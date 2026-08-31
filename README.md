@@ -77,9 +77,9 @@ Everything below is prefixed with `/api/v1`. Auth-protected routes need `Authori
 | Method | Path | What it does |
 |---|---|---|
 | `GET` | `/topup/products` | List active coin packages a customer can buy |
-| `POST` | `/topup/check-id` | Validate a game/user ID before checkout. Body: `{ game_code, user_id, zone_id? }` |
+| `POST` | `/topup/check-id` | Validate a game/user ID before checkout. Body: `{ game_code, user_id, zone_id? }`. Returns `{ username, avatar_url }` — `avatar_url` is `null` on the mock provider |
 | `POST` | `/topup/checkout` | Start a purchase. Body: `{ product_id, target_user_id, target_zone_id?, affiliate_code? }`. Returns a Duitku invoice URL to pay. |
-| `GET` | `/topup/transactions/:id` | Check a transaction's status (useful after redirecting back from Duitku) |
+| `GET` | `/topup/transactions/:id` | Check a transaction's status (useful after redirecting back from Duitku). Includes `admin_fee` — Duitku's own transaction fee, fetched live once a `duitku_reference` exists; `null` if not yet available or the lookup fails |
 
 ### Contact (public, no login needed)
 
