@@ -1,4 +1,8 @@
-import { BadGatewayException, Injectable } from '@nestjs/common';
+import {
+  BadGatewayException,
+  BadRequestException,
+  Injectable,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { createHash } from 'crypto';
 import {
@@ -27,6 +31,18 @@ interface MomoResponse<T> {
  * the same string representation either way) still matches - it never gets
  * that far, since their backend fails to deserialize the field before
  * checking the signature. Fixed by storing merchantId as a number.
+ *
+ * Second real bug found in production use (2026-08-31, reported by the FE
+ * dev as "api ne eror ... teko third party"): a normal MomoLive business
+ * rejection (e.g. "user not found" for a customer-typed game ID, or an
+ * invalid non-numeric ID) was thrown as BadGatewayException (502) - the
+ * same class used for genuine MomoLive outages. This mischaracterized
+ * routine bad input as an infrastructure failure, and Cloudflare hides
+ * the real message behind its own generic error page for any 5xx from
+ * the origin, so it looked like the whole backend was down. Fixed by
+ * using BadRequestException (400) for MomoLive's own "code": 400
+ * business rejections and for client-side ID validation, reserving
+ * BadGatewayException for actual `!response.ok` transport failures.
  *
  * MomoLive is a single platform with no game_code/zone concept, so
  * checkId's gameCode/targetZoneId parameters (kept for ProviderTopUpPort's
@@ -97,10 +113,9 @@ export class MomoProviderTopUpService implements ProviderTopUpPort {
   }
 
   /**
-   * Queries the merchant's own remaining coin balance. Not part of
-   * ProviderTopUpPort (no calling code needs it yet), but useful for a
-   * future admin monitoring endpoint - injectCoin will start failing
-   * silently from Momo's side once this runs out.
+   * Queries the merchant's own remaining coin balance, exposed via
+   * GET /admin/provider/balance - injectCoin will start failing from
+   * Momo's side once this runs out.
    */
   async getBalance(): Promise<number> {
     const result = await this.call<{ balance: number }>('/openapi/v1/balance', {
@@ -134,8 +149,16 @@ export class MomoProviderTopUpService implements ProviderTopUpPort {
     const body = (await response.json()) as MomoResponse<T>;
 
     if (body.code !== 0 || body.data === null) {
-      throw new BadGatewayException(
-        `MomoLive ${path} failed: ${body.message} (code ${body.code})`,
+      // Per the doc, MomoLive labels every business-level rejection
+      // (wrong user_id, insufficient balance, etc.) as "code": 400 - this
+      // is a normal client-input problem (e.g. a customer typed a wrong
+      // game ID), not an infrastructure failure, so it must not be a 502.
+      // A 502 here previously (a) misrepresented a routine "user not
+      // found" as if MomoLive itself were down, and (b) got hidden behind
+      // Cloudflare's own generic error page instead of this real message,
+      // since Cloudflare intercepts 5xx responses from the origin.
+      throw new BadRequestException(
+        `MomoLive rejected the request: ${body.message} (code ${body.code})`,
       );
     }
 
@@ -170,12 +193,14 @@ export function signMomoParams(
 /**
  * MomoLive's user_id is documented as int64, not a string - convert
  * explicitly and fail clearly rather than silently sending `null` (which
- * is what JSON.stringify(NaN) produces) for a non-numeric target ID.
+ * is what JSON.stringify(NaN) produces) for a non-numeric target ID. A
+ * non-numeric ID is client input, not a MomoLive-side problem, so this is
+ * a BadRequestException, not BadGatewayException.
  */
 function toMomoUserId(targetUserId: string): number {
   const numeric = Number(targetUserId);
   if (!Number.isInteger(numeric)) {
-    throw new BadGatewayException(
+    throw new BadRequestException(
       `Invalid target user ID for MomoLive (must be numeric): "${targetUserId}"`,
     );
   }
