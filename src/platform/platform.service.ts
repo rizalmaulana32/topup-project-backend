@@ -40,22 +40,32 @@ export class PlatformService {
   /**
    * Credits the platform's own revenue for a successfully fulfilled
    * transaction: sellingPrice (grossAmount) minus the product's cost
-   * (baseCost) minus whatever commission was paid out on it. Called from
+   * (baseCost) minus whatever commission was paid out on it minus
+   * Duitku's own transaction fee (duitkuFee). Called from
    * TopupService.handleInvoicePaid for every successful injection,
    * regardless of whether the transaction had a referral code (commissionPaid
    * is "0.00" when there wasn't one). Uses the same pessimistic-lock
    * pattern as AffiliatesService.creditCommissionForTransaction.
+   *
+   * duitkuFee was missing entirely until 2026-09-08 (client-reported: the
+   * platform balance never matched Duitku's real numbers) - this ledger
+   * was silently overstating revenue by Duitku's own cut on every single
+   * transaction (a real, non-trivial fee - confirmed "5000.00" on a
+   * "10000.00" sandbox transaction via checkTransactionStatus). Past
+   * credits made before this fix are NOT retroactively corrected here.
    */
   async creditRevenueForTransaction(params: {
     transactionId: string;
     grossAmount: string;
     baseCost: string;
     commissionPaid: string;
+    duitkuFee: string;
   }): Promise<void> {
     const revenue =
       Number(params.grossAmount) -
       Number(params.baseCost) -
-      Number(params.commissionPaid);
+      Number(params.commissionPaid) -
+      Number(params.duitkuFee);
 
     const queryRunner = this.dataSource.createQueryRunner();
     await queryRunner.connect();
@@ -82,7 +92,7 @@ export class PlatformService {
         type: PlatformRevenueLogType.CREDIT,
         amount: revenue.toFixed(2),
         balanceAfter: newBalance.toFixed(2),
-        description: `Platform revenue for transaction ${params.transactionId} (gross ${params.grossAmount} - cost ${params.baseCost} - commission ${params.commissionPaid})`,
+        description: `Platform revenue for transaction ${params.transactionId} (gross ${params.grossAmount} - cost ${params.baseCost} - commission ${params.commissionPaid} - duitku fee ${params.duitkuFee})`,
       });
       await queryRunner.manager.save(log);
 

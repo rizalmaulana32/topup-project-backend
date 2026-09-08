@@ -196,11 +196,29 @@ export class TopupService {
           })
         : '0.00';
 
+      let duitkuFee = '0.00';
+      try {
+        const status = await this.duitkuService.checkTransactionStatus(
+          transaction.id,
+        );
+        duitkuFee = status.fee ?? '0.00';
+      } catch (error) {
+        // The platform revenue credit is best-effort on the fee - a failed
+        // lookup must not block a coin injection that already succeeded.
+        // Falling back to 0 understates the real Duitku cost for this one
+        // transaction (better than blocking the webhook), and is logged
+        // loudly so it's not silently wrong.
+        this.logger.warn(
+          `Could not fetch Duitku fee for platform revenue credit on ${transaction.id}, crediting with fee=0: ${error instanceof Error ? error.message : 'unknown error'}`,
+        );
+      }
+
       await this.platformService.creditRevenueForTransaction({
         transactionId: transaction.id,
         grossAmount: transaction.grossAmount,
         baseCost: transaction.product.basePrice,
         commissionPaid,
+        duitkuFee,
       });
     }
   }

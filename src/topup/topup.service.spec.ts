@@ -285,6 +285,11 @@ describe('TopupService', () => {
         success: true,
         response: '{"mock":true}',
       });
+      duitkuService.checkTransactionStatus.mockResolvedValue({
+        statusCode: '00',
+        statusMessage: 'SUCCESS',
+        fee: '1000.00',
+      });
 
       await service.handleInvoicePaid('TRX-20260805-0001');
 
@@ -307,6 +312,39 @@ describe('TopupService', () => {
         grossAmount: '20000.00',
         baseCost: '15000',
         commissionPaid: '0.00',
+        duitkuFee: '1000.00',
+      });
+    });
+
+    it('credits platform revenue with fee=0 if the Duitku fee lookup fails, without blocking the coin injection already recorded', async () => {
+      const transaction = {
+        id: 'TRX-20260805-0010',
+        paymentStatus: PaymentStatus.PENDING,
+        targetUserId: '1',
+        targetZoneId: '99',
+        referralCode: null,
+        grossAmount: '20000.00',
+        product,
+      };
+      transactionsService.findByExternalId.mockResolvedValue(
+        transaction as any,
+      );
+      injectCoinMock.mockResolvedValue({
+        success: true,
+        response: '{"mock":true}',
+      });
+      duitkuService.checkTransactionStatus.mockRejectedValue(
+        new Error('Duitku transactionStatus request failed: HTTP 500'),
+      );
+
+      await service.handleInvoicePaid('TRX-20260805-0010');
+
+      expect(creditRevenueMock).toHaveBeenCalledWith({
+        transactionId: 'TRX-20260805-0010',
+        grossAmount: '20000.00',
+        baseCost: '15000',
+        commissionPaid: '0.00',
+        duitkuFee: '0.00',
       });
     });
 
@@ -328,6 +366,11 @@ describe('TopupService', () => {
         response: '{"mock":true}',
       });
       creditCommissionMock.mockResolvedValue('2000.00');
+      duitkuService.checkTransactionStatus.mockResolvedValue({
+        statusCode: '00',
+        statusMessage: 'SUCCESS',
+        fee: '1000.00',
+      });
 
       await service.handleInvoicePaid('TRX-20260805-0003');
 
@@ -341,6 +384,7 @@ describe('TopupService', () => {
         grossAmount: '20000.00',
         baseCost: '15000',
         commissionPaid: '2000.00',
+        duitkuFee: '1000.00',
       });
     });
 
