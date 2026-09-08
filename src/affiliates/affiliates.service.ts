@@ -109,6 +109,9 @@ export class AffiliatesService {
 
     return {
       affiliate_code: profile.affiliateCode,
+      bank_name: profile.bankName,
+      account_number: profile.accountNumber,
+      account_holder: profile.accountHolder,
       commission_balance: profile.commissionBalance,
       total_commission_earned: profile.totalCommissionEarned,
       referred_transaction_count: referredTransactions.length,
@@ -167,6 +170,42 @@ export class AffiliatesService {
   ): Promise<AffiliatorProfile> {
     const profile = await this.findProfileByIdOrFail(profileId);
     profile.commissionRate = commissionRate.toFixed(2);
+    return this.profileRepository.save(profile);
+  }
+
+  /**
+   * Lets an affiliate add/update their own bank payout details after
+   * registration - previously there was no way to do this at all once
+   * registered (client-reported gap). Only affects the profile itself;
+   * a withdrawal already requested keeps the bank details it captured at
+   * request time (see requestWithdrawal), so this can't retroactively
+   * change where a pending payout is headed.
+   */
+  async updateBankDetails(
+    userId: string,
+    params: {
+      bankName?: string;
+      accountNumber?: string;
+      accountHolder?: string;
+    },
+  ): Promise<AffiliatorProfile> {
+    const profile = await this.profileRepository.findOne({
+      where: { userId },
+    });
+    if (!profile) {
+      throw new NotFoundException('Affiliate profile not found');
+    }
+
+    if (params.bankName !== undefined) {
+      profile.bankName = params.bankName;
+    }
+    if (params.accountNumber !== undefined) {
+      profile.accountNumber = params.accountNumber;
+    }
+    if (params.accountHolder !== undefined) {
+      profile.accountHolder = params.accountHolder;
+    }
+
     return this.profileRepository.save(profile);
   }
 

@@ -170,6 +170,62 @@ describe('Affiliate (e2e)', () => {
     expect(refreshBody.data.access_token).toEqual(expect.any(String));
   });
 
+  it('rejects updating bank details without a token', async () => {
+    await request(app.getHttpServer())
+      .patch('/api/v1/affiliate/bank-details')
+      .send({ account_holder: 'Someone Else' })
+      .expect(401);
+  });
+
+  it('lets the approved affiliate update their own bank details, reflected on the dashboard', async () => {
+    const loginResponse = await request(app.getHttpServer())
+      .post('/api/v1/auth/login')
+      .send({
+        email: registrationPayload.email,
+        password: registrationPayload.password,
+      })
+      .expect(201);
+    const loginBody = loginResponse.body as {
+      data: { access_token: string };
+    };
+    const token = loginBody.data.access_token;
+
+    const updateResponse = await request(app.getHttpServer())
+      .patch('/api/v1/affiliate/bank-details')
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        bank_name: 'BNI',
+        account_number: '9988776655',
+        account_holder: 'Ana Affiliate Updated',
+      })
+      .expect(200);
+
+    const updateBody = updateResponse.body as {
+      success: boolean;
+      data: {
+        bank_name: string;
+        account_number: string;
+        account_holder: string;
+      };
+    };
+    expect(updateBody.success).toBe(true);
+    expect(updateBody.data).toEqual({
+      bank_name: 'BNI',
+      account_number: '9988776655',
+      account_holder: 'Ana Affiliate Updated',
+    });
+
+    const dashboardResponse = await request(app.getHttpServer())
+      .get('/api/v1/affiliate/dashboard')
+      .set('Authorization', `Bearer ${token}`)
+      .expect(200);
+    const dashboardBody = dashboardResponse.body as {
+      data: { bank_name: string; account_number: string };
+    };
+    expect(dashboardBody.data.bank_name).toBe('BNI');
+    expect(dashboardBody.data.account_number).toBe('9988776655');
+  });
+
   it('rejects login with a wrong password', async () => {
     await request(app.getHttpServer())
       .post('/api/v1/auth/login')

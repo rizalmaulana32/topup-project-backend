@@ -252,6 +252,39 @@ describe('AffiliatesService', () => {
     });
   });
 
+  describe('updateBankDetails', () => {
+    it('updates only the provided fields', async () => {
+      profileFindOneMock.mockResolvedValue({
+        id: '1',
+        userId: '1',
+        bankName: 'BCA',
+        accountNumber: '1234567890',
+        accountHolder: 'Old Name',
+      });
+      profileSaveMock.mockImplementation((v: unknown) => Promise.resolve(v));
+
+      const result = await service.updateBankDetails('1', {
+        accountHolder: 'New Name',
+      });
+
+      expect(result).toEqual(
+        expect.objectContaining({
+          bankName: 'BCA',
+          accountNumber: '1234567890',
+          accountHolder: 'New Name',
+        }),
+      );
+    });
+
+    it('throws NotFoundException when no profile matches the user', async () => {
+      profileFindOneMock.mockResolvedValue(null);
+
+      await expect(
+        service.updateBankDetails('999', { bankName: 'BNI' }),
+      ).rejects.toBeInstanceOf(NotFoundException);
+    });
+  });
+
   describe('findWithdrawalByIdOrFail', () => {
     it('throws NotFoundException when no withdrawal matches', async () => {
       withdrawalFindOneMock.mockResolvedValue(null);
