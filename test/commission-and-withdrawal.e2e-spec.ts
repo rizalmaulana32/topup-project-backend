@@ -339,6 +339,20 @@ describe('Commission crediting and withdrawal (e2e)', () => {
     expect(body.data.items.some((w) => w.id === paidRecord.id)).toBe(true);
   });
 
+  it('accepts "success" as an alias for "paid" when filtering withdrawals', async () => {
+    const response = await request(app.getHttpServer())
+      .get('/api/v1/admin/withdrawals?status=success')
+      .set('Authorization', `Bearer ${superadminToken}`)
+      .expect(200);
+
+    const body = response.body as {
+      data: { items: { status: WithdrawalStatus }[] };
+    };
+    expect(
+      body.data.items.every((w) => w.status === WithdrawalStatus.PAID),
+    ).toBe(true);
+  });
+
   it('refunds the balance when a withdrawal payout fails', async () => {
     const requestResponse = await request(app.getHttpServer())
       .post('/api/v1/affiliate/withdraw')

@@ -299,6 +299,20 @@ describe('Platform revenue and withdrawal (e2e)', () => {
     ).toBe(true);
   });
 
+  it('accepts "success" as an alias for "paid" when filtering platform withdrawals', async () => {
+    const response = await request(app.getHttpServer())
+      .get('/api/v1/admin/platform/withdrawals?status=success')
+      .set('Authorization', `Bearer ${superadminToken}`)
+      .expect(200);
+
+    const body = response.body as {
+      data: { items: { status: PlatformWithdrawalStatus }[] };
+    };
+    expect(
+      body.data.items.every((w) => w.status === PlatformWithdrawalStatus.PAID),
+    ).toBe(true);
+  });
+
   it('refunds the balance when a platform withdrawal payout fails', async () => {
     const requestResponse = await request(app.getHttpServer())
       .post('/api/v1/admin/platform/withdraw')
