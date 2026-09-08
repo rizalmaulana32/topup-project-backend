@@ -339,14 +339,39 @@ export class DuitkuService {
    * Online) and resolves synchronously with the final outcome - there is
    * no callback to wait on for this product (see class doc). Returns a
    * structured failure instead of throwing for an expected business
-   * outcome (bad account, insufficient funds, inquiry rejected) so the
-   * caller can refund the withdrawal immediately; still throws for a
-   * genuine connectivity/infrastructure error, since that's not a result
-   * the caller should record as a final disbursement outcome.
+   * outcome (bad account, insufficient funds, inquiry rejected, missing
+   * bank-code mapping) so the caller can refund the withdrawal
+   * immediately; still throws for a genuine connectivity/infrastructure
+   * error, since that's not a result the caller should record as a final
+   * disbursement outcome.
+   *
+   * Real production bug found 2026-09-08: deriveDuitkuBankCode's
+   * deliberate throw for the still-missing bank-code mapping was
+   * uncaught here, surfacing as a raw, unexplained 500 the moment a real
+   * client actually tried to approve a real withdrawal - instead of the
+   * same graceful FAILED-with-refund outcome every other Duitku rejection
+   * already gets. This doesn't make disbursement work (still blocked on
+   * the missing mapping, itself blocked on Duitku's account activation),
+   * it just makes the failure behave like every other expected one.
    */
   async createPayout(params: CreatePayoutParams): Promise<CreatePayoutResult> {
     const amount = Math.round(params.amount);
-    const bankCode = deriveDuitkuBankCode(params.bankName);
+
+    let bankCode: string;
+    try {
+      bankCode = deriveDuitkuBankCode(params.bankName);
+    } catch (error) {
+      return {
+        success: false,
+        payoutId: null,
+        responseCode: 'BANK_CODE_MISSING',
+        responseDesc:
+          error instanceof Error
+            ? error.message
+            : `No Duitku bank code mapping for "${params.bankName}"`,
+      };
+    }
+
     const inquiry = await this.inquireDisbursement({
       referenceId: params.referenceId,
       amount,
