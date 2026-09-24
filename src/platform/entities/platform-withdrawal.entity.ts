@@ -2,6 +2,14 @@ import { Column, CreateDateColumn, Entity, PrimaryColumn } from 'typeorm';
 
 export enum PlatformWithdrawalStatus {
   PENDING = 'pending',
+  /**
+   * Sent to the payout provider (LinkQu), which returned PENDING per its
+   * own documented async handling rules - not in the original enum since
+   * Duitku's Transfer Online always resolved synchronously. Resolved later
+   * by the real LinkQu disbursement callback. Mirrors
+   * CommissionWithdrawal's WithdrawalStatus.APPROVED.
+   */
+  APPROVED = 'approved',
   REJECTED = 'rejected',
   PAID = 'paid',
   FAILED = 'failed',
@@ -40,12 +48,12 @@ export class PlatformWithdrawal {
   status: PlatformWithdrawalStatus;
 
   @Column({
-    name: 'duitku_disbursement_id',
+    name: 'linkqu_disbursement_id',
     type: 'varchar',
     unique: true,
     nullable: true,
   })
-  duitkuDisbursementId: string | null;
+  linkQuDisbursementId: string | null;
 
   @Column({ name: 'processed_by', type: 'bigint', nullable: true })
   processedBy: string | null;

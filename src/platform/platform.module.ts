@@ -1,6 +1,6 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
-import { DuitkuModule } from '../duitku/duitku.module';
+import { LinkQuModule } from '../linkqu/linkqu.module';
 import { PlatformSettings } from '../settings/entities/platform-settings.entity';
 import { PlatformRevenueLog } from './entities/platform-revenue-log.entity';
 import { PlatformWithdrawal } from './entities/platform-withdrawal.entity';
@@ -13,7 +13,7 @@ import { PlatformService } from './platform.service';
       PlatformRevenueLog,
       PlatformWithdrawal,
     ]),
-    DuitkuModule,
+    LinkQuModule,
   ],
   providers: [PlatformService],
   exports: [PlatformService],

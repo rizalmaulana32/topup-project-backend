@@ -20,7 +20,7 @@ import { Roles } from '../auth/roles.decorator';
 import { RolesGuard } from '../auth/roles.guard';
 import { AuthenticatedUser } from '../auth/types/jwt-payload';
 import { ContactService } from '../contact/contact.service';
-import { DuitkuService } from '../duitku/duitku.service';
+import { LinkQuService } from '../linkqu/linkqu.service';
 import { PlatformService } from '../platform/platform.service';
 import { PROVIDER_TOP_UP_PORT } from '../provider/provider-top-up.port';
 import type { ProviderTopUpPort } from '../provider/provider-top-up.port';
@@ -56,7 +56,7 @@ export class AdminController {
     private readonly contactService: ContactService,
     @Inject(PROVIDER_TOP_UP_PORT)
     private readonly providerTopUp: ProviderTopUpPort,
-    private readonly duitkuService: DuitkuService,
+    private readonly linkQuService: LinkQuService,
     private readonly platformService: PlatformService,
   ) {}
 
@@ -246,7 +246,7 @@ export class AdminController {
 
   @Post('withdrawals/:id/approve')
   @ApiOperation({
-    summary: 'Approve a withdrawal — triggers a real Duitku disbursement',
+    summary: 'Approve a withdrawal — triggers a real LinkQu disbursement',
   })
   async approveWithdrawal(
     @Param('id') id: string,
@@ -261,7 +261,7 @@ export class AdminController {
       data: {
         withdrawal_id: withdrawal.id,
         status: withdrawal.status,
-        duitku_disbursement_id: withdrawal.duitkuDisbursementId,
+        linkqu_disbursement_id: withdrawal.linkQuDisbursementId,
       },
     };
   }
@@ -269,7 +269,7 @@ export class AdminController {
   @Post('withdrawals/:id/reject')
   @ApiOperation({
     summary:
-      'Reject a withdrawal before it is sent to Duitku and refund the locked balance',
+      'Reject a withdrawal before it is sent to LinkQu and refund the locked balance',
   })
   async rejectWithdrawal(
     @Param('id') id: string,
@@ -352,18 +352,17 @@ export class AdminController {
     return { success: true, data: { balance } };
   }
 
-  @Get('duitku/balance')
+  @Get('linkqu/balance')
   @ApiOperation({
-    summary:
-      "Check the merchant's Duitku disbursement balance (returns a rejection until Duitku activates disbursement on this account)",
+    summary: "Check the merchant's LinkQu account balance",
   })
-  async getDuitkuBalance() {
-    const result = await this.duitkuService.checkBalance();
+  async getLinkQuBalance() {
+    const result = await this.linkQuService.checkBalance();
     return {
       success: result.success,
       data: {
         balance: result.balance,
-        effective_balance: result.effectiveBalance,
+        unsettle_amount: result.unsettleAmount,
         response_code: result.responseCode,
         response_desc: result.responseDesc,
       },
@@ -436,7 +435,7 @@ export class AdminController {
   @Post('platform/withdrawals/:id/approve')
   @ApiOperation({
     summary:
-      'Approve a platform withdrawal — triggers a real Duitku disbursement to the admin payout account',
+      'Approve a platform withdrawal — triggers a real LinkQu disbursement to the admin payout account',
   })
   async approvePlatformWithdrawal(
     @Param('id') id: string,
@@ -451,7 +450,7 @@ export class AdminController {
       data: {
         withdrawal_id: withdrawal.id,
         status: withdrawal.status,
-        duitku_disbursement_id: withdrawal.duitkuDisbursementId,
+        linkqu_disbursement_id: withdrawal.linkQuDisbursementId,
       },
     };
   }
@@ -459,7 +458,7 @@ export class AdminController {
   @Post('platform/withdrawals/:id/reject')
   @ApiOperation({
     summary:
-      'Reject a platform withdrawal before it is sent to Duitku and refund the locked balance',
+      'Reject a platform withdrawal before it is sent to LinkQu and refund the locked balance',
   })
   async rejectPlatformWithdrawal(
     @Param('id') id: string,

@@ -40,20 +40,20 @@ export class TransactionsService {
     return this.transactionRepository.save(transaction);
   }
 
-  async attachDuitkuReference(
+  async attachLinkQuReference(
     transactionId: string,
-    duitkuReference: string,
+    linkQuReference: string,
   ): Promise<void> {
     await this.transactionRepository.update(transactionId, {
-      duitkuReference,
+      linkQuReference,
     });
   }
 
-  async findByDuitkuReference(
-    duitkuReference: string,
+  async findByLinkQuReference(
+    linkQuReference: string,
   ): Promise<Transaction | null> {
     return this.transactionRepository.findOne({
-      where: { duitkuReference },
+      where: { linkQuReference },
     });
   }
 

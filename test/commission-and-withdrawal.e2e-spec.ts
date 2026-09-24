@@ -21,28 +21,28 @@ import {
 } from '../src/products/entities/product.entity';
 import { Transaction } from '../src/transactions/entities/transaction.entity';
 import { User, UserRole, UserStatus } from '../src/users/entities/user.entity';
-import { DuitkuService } from '../src/duitku/duitku.service';
+import { LinkQuService } from '../src/linkqu/linkqu.service';
 
 /**
  * Exercises the full referred-purchase -> commission-credit -> withdrawal
- * -> Duitku Disbursement lifecycle against a real Postgres database.
- * DuitkuService is overridden with a deterministic double for both Invoice
- * and Disbursement calls (no real Duitku credentials assumed here); see
- * topup.e2e-spec.ts for the live-checkout-only override and
+ * -> LinkQu disbursement lifecycle against a real Postgres database.
+ * LinkQuService is overridden with a deterministic double for both Payment
+ * Link and disbursement calls (no real LinkQu credentials assumed here);
+ * see topup.e2e-spec.ts for the live-checkout-only override and
  * admin.e2e-spec.ts for the affiliate approval flow this test builds on.
  */
 const TEST_SIGNATURE = 'e2e-test-signature';
 
-// Duitku's real Transfer Online disbursement resolves synchronously (no
-// callback - see DuitkuService), so the fake needs a way for a specific
-// test to force a failure result without a separate webhook call.
+// LinkQu's real withdraw/payment can return PAID or PENDING; the fake
+// forces a FAILED result for a specific test without a separate webhook
+// call, mirroring the old Duitku fake's forced-failure mechanism.
 const failingPayoutReferenceIds = new Set<string>();
 
-class FakeDuitkuService {
+class FakeLinkQuService {
   createInvoice(params: { externalId: string }) {
     return Promise.resolve({
       invoiceId: `fake-reference-${params.externalId}`,
-      invoiceUrl: `https://app-sandbox.duitku.com/checkout/fake-reference-${params.externalId}`,
+      invoiceUrl: `https://cognos.linkqu.id/pay/fake-reference-${params.externalId}`,
       status: '00',
     });
   }
@@ -54,6 +54,7 @@ class FakeDuitkuService {
         payoutId: null,
         responseCode: '01',
         responseDesc: 'Insufficient funds',
+        status: 'FAILED' as const,
       });
     }
     return Promise.resolve({
@@ -61,6 +62,7 @@ class FakeDuitkuService {
       payoutId: `fake-payout-${params.referenceId}`,
       responseCode: '00',
       responseDesc: 'Success',
+      status: 'PAID' as const,
     });
   }
 
@@ -105,8 +107,8 @@ describe('Commission crediting and withdrawal (e2e)', () => {
     const moduleFixture: TestingModule = await Test.createTestingModule({
       imports: [AppModule],
     })
-      .overrideProvider(DuitkuService)
-      .useClass(FakeDuitkuService)
+      .overrideProvider(LinkQuService)
+      .useClass(FakeLinkQuService)
       .compile();
 
     app = moduleFixture.createNestApplication();
@@ -221,12 +223,13 @@ describe('Commission crediting and withdrawal (e2e)', () => {
     const transactionId = checkoutBody.data.transaction_id;
 
     await request(app.getHttpServer())
-      .post('/api/v1/webhooks/duitku/invoice')
-      .type('form')
+      .post('/api/v1/webhooks/linkqu/payment')
       .send({
-        merchantOrderId: transactionId,
-        amount: '2000000',
-        resultCode: '00',
+        partner_reff: transactionId,
+        amount: 2000000,
+        va_number: '7136490000031689',
+        username: 'LI307GXIN',
+        status: 'SUCCESS',
         signature: TEST_SIGNATURE,
       })
       .expect(200);
@@ -284,7 +287,7 @@ describe('Commission crediting and withdrawal (e2e)', () => {
       .expect(400);
   });
 
-  it('completes a withdrawal immediately on admin approval (Duitku Transfer Online has no callback)', async () => {
+  it('completes a withdrawal immediately on admin approval when LinkQu returns PAID synchronously', async () => {
     const pending = await withdrawalRepository.findOneOrFail({
       where: {
         affiliatorId: affiliateProfileId,
@@ -297,10 +300,10 @@ describe('Commission crediting and withdrawal (e2e)', () => {
       .set('Authorization', `Bearer ${superadminToken}`)
       .expect(201);
     const approveBody = approveResponse.body as {
-      data: { status: string; duitku_disbursement_id: string };
+      data: { status: string; linkqu_disbursement_id: string };
     };
     expect(approveBody.data.status).toBe(WithdrawalStatus.PAID);
-    expect(approveBody.data.duitku_disbursement_id).toBe(
+    expect(approveBody.data.linkqu_disbursement_id).toBe(
       `fake-payout-${pending.id}`,
     );
 
@@ -398,7 +401,7 @@ describe('Commission crediting and withdrawal (e2e)', () => {
     expect(refundLog?.amount).toBe('50000.00');
   });
 
-  it('rejects a withdrawal request and refunds the balance without contacting Duitku', async () => {
+  it('rejects a withdrawal request and refunds the balance without contacting LinkQu', async () => {
     const requestResponse = await request(app.getHttpServer())
       .post('/api/v1/affiliate/withdraw')
       .set('Authorization', `Bearer ${affiliateToken}`)
@@ -425,7 +428,7 @@ describe('Commission crediting and withdrawal (e2e)', () => {
       where: { id: withdrawalId },
     });
     expect(rejected.status).toBe(WithdrawalStatus.REJECTED);
-    expect(rejected.duitkuDisbursementId).toBeNull();
+    expect(rejected.linkQuDisbursementId).toBeNull();
 
     const refundedProfile = await profileRepository.findOneOrFail({
       where: { id: affiliateProfileId },
@@ -457,12 +460,13 @@ describe('Commission crediting and withdrawal (e2e)', () => {
 
   it('rejects a disbursement webhook with an invalid signature', async () => {
     await request(app.getHttpServer())
-      .post('/api/v1/webhooks/duitku/disbursement')
-      .type('form')
+      .post('/api/v1/webhooks/linkqu/disbursement')
       .send({
-        custRefNumber: 'WDW-doesnotmatter',
-        amount: '1000',
-        statusCode: '00',
+        partner_reff: 'WDW-doesnotmatter',
+        amount: 1000,
+        accountnumber: '1234567890',
+        username: 'LI307GXIN',
+        status: 'SUCCESS',
         signature: 'wrong-signature',
       })
       .expect(401);

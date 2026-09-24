@@ -33,7 +33,7 @@ export class PlatformSettings {
    * commission paid, credited on every successfully-injected paid
    * transaction — see PlatformService.creditRevenueForTransaction),
    * withdrawable by the superadmin to adminBankName/adminAccountNumber
-   * via the same Duitku disbursement flow used for affiliate withdrawals.
+   * via the same LinkQu disbursement flow used for affiliate withdrawals.
    */
   @Column({
     name: 'platform_balance',

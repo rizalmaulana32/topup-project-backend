@@ -7,7 +7,7 @@ import { App } from 'supertest/types';
 import { Repository } from 'typeorm';
 import { AppModule } from '../src/app.module';
 import { AffiliatorProfile } from '../src/affiliates/entities/affiliator-profile.entity';
-import { DuitkuService } from '../src/duitku/duitku.service';
+import { LinkQuService } from '../src/linkqu/linkqu.service';
 import { Product } from '../src/products/entities/product.entity';
 import { User, UserRole, UserStatus } from '../src/users/entities/user.entity';
 
@@ -17,20 +17,18 @@ import { User, UserRole, UserStatus } from '../src/users/entities/user.entity';
  * directly through the repository (no self-registration endpoint exists,
  * by design — see plan/topup-affiliate-platform-superadmin-commission-payout-2026-08-10.md).
  *
- * DuitkuService is overridden with a deterministic double for the
- * GET /admin/duitku/balance test only — this environment has no real
- * DUITKU_USER_ID/DUITKU_EMAIL configured, and the real endpoint currently
- * always rejects anyway (disbursement isn't provisioned on this account —
- * see DuitkuService.checkBalance's doc comment).
+ * LinkQuService is overridden with a deterministic double for the
+ * GET /admin/linkqu/balance test only — this environment has no real
+ * LINKQU_* credentials configured.
  */
-class FakeDuitkuService {
+class FakeLinkQuService {
   checkBalance() {
     return Promise.resolve({
-      success: false,
-      balance: 0,
-      effectiveBalance: 0,
-      responseCode: '-120',
-      responseDesc: 'User not allowed',
+      success: true,
+      balance: 9806952445,
+      unsettleAmount: 0,
+      responseCode: '00',
+      responseDesc: 'Berhasil',
     });
   }
 }
@@ -76,8 +74,8 @@ describe('Admin (e2e)', () => {
     const moduleFixture: TestingModule = await Test.createTestingModule({
       imports: [AppModule],
     })
-      .overrideProvider(DuitkuService)
-      .useClass(FakeDuitkuService)
+      .overrideProvider(LinkQuService)
+      .useClass(FakeLinkQuService)
       .compile();
 
     app = moduleFixture.createNestApplication();
@@ -439,9 +437,9 @@ describe('Admin (e2e)', () => {
       .expect(400);
   });
 
-  it('checks Duitku disbursement balance (rejected — disbursement not provisioned on this account)', async () => {
+  it('checks the LinkQu account balance', async () => {
     const response = await request(app.getHttpServer())
-      .get('/api/v1/admin/duitku/balance')
+      .get('/api/v1/admin/linkqu/balance')
       .set('Authorization', `Bearer ${superadminToken}`)
       .expect(200);
 
@@ -449,18 +447,18 @@ describe('Admin (e2e)', () => {
       success: boolean;
       data: { balance: number; response_code: string };
     };
-    expect(body.success).toBe(false);
-    expect(body.data.response_code).toBe('-120');
+    expect(body.success).toBe(true);
+    expect(body.data.response_code).toBe('00');
   });
 
-  it('rejects the Duitku balance check for a non-superadmin token', async () => {
+  it('rejects the LinkQu balance check for a non-superadmin token', async () => {
     const affiliateToken = await login(
       'pending1.e2e@example.com',
       'super-secret-password',
     );
 
     await request(app.getHttpServer())
-      .get('/api/v1/admin/duitku/balance')
+      .get('/api/v1/admin/linkqu/balance')
       .set('Authorization', `Bearer ${affiliateToken}`)
       .expect(403);
   });

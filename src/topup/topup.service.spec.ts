@@ -4,7 +4,7 @@ import { AffiliatesService } from '../affiliates/affiliates.service';
 import { PlatformService } from '../platform/platform.service';
 import { ProductsService } from '../products/products.service';
 import { TransactionsService } from '../transactions/transactions.service';
-import { DuitkuService } from '../duitku/duitku.service';
+import { LinkQuService } from '../linkqu/linkqu.service';
 import { TopupService } from './topup.service';
 import { ProductStatus } from '../products/entities/product.entity';
 import { PaymentStatus } from '../transactions/entities/transaction.entity';
@@ -25,7 +25,7 @@ describe('TopupService', () => {
     Pick<
       TransactionsService,
       | 'createPending'
-      | 'attachDuitkuReference'
+      | 'attachLinkQuReference'
       | 'findByExternalId'
       | 'markPaid'
       | 'markExpired'
@@ -33,11 +33,8 @@ describe('TopupService', () => {
       | 'markProviderResult'
     >
   >;
-  let duitkuService: jest.Mocked<
-    Pick<
-      DuitkuService,
-      'createInvoice' | 'checkTransactionStatus' | 'getPaymentMethods'
-    >
+  let linkQuService: jest.Mocked<
+    Pick<LinkQuService, 'createInvoice' | 'checkTransactionStatus'>
   >;
   let creditCommissionMock: jest.Mock;
   let affiliatesService: jest.Mocked<
@@ -74,17 +71,16 @@ describe('TopupService', () => {
     productsService = { findActiveByIdOrFail: jest.fn() };
     transactionsService = {
       createPending: jest.fn(),
-      attachDuitkuReference: jest.fn(),
+      attachLinkQuReference: jest.fn(),
       findByExternalId: jest.fn(),
       markPaid: jest.fn(),
       markExpired: jest.fn(),
       markFailed: jest.fn(),
       markProviderResult: jest.fn(),
     };
-    duitkuService = {
+    linkQuService = {
       createInvoice: jest.fn(),
       checkTransactionStatus: jest.fn(),
-      getPaymentMethods: jest.fn(),
     };
     creditCommissionMock = jest.fn().mockResolvedValue('0.00');
     affiliatesService = {
@@ -99,7 +95,7 @@ describe('TopupService', () => {
       provider,
       productsService as unknown as ProductsService,
       transactionsService as unknown as TransactionsService,
-      duitkuService as unknown as DuitkuService,
+      linkQuService as unknown as LinkQuService,
       affiliatesService as unknown as AffiliatesService,
       platformService as unknown as PlatformService,
     );
@@ -129,38 +125,38 @@ describe('TopupService', () => {
   });
 
   describe('getTransactionStatus', () => {
-    it('includes the Duitku fee for a transaction with a duitku_reference', async () => {
+    it('includes the LinkQu fee for a transaction with a linkqu_reference', async () => {
       transactionsService.findByExternalId.mockResolvedValue({
         id: 'TRX-20260805-0001',
         paymentStatus: PaymentStatus.PAID,
         providerStatus: null,
-        duitkuReference: 'DS3460326ABC',
+        linkQuReference: 'DS3460326ABC',
         grossAmount: '10000.00',
         product: null,
         createdAt: new Date(),
         paidAt: new Date(),
         completedAt: new Date(),
       } as any);
-      duitkuService.checkTransactionStatus.mockResolvedValue({
-        statusCode: '00',
+      linkQuService.checkTransactionStatus.mockResolvedValue({
+        statusCode: 'success',
         statusMessage: 'SUCCESS',
         fee: '5000.00',
       });
 
       const result = await service.getTransactionStatus('TRX-20260805-0001');
 
-      expect(duitkuService.checkTransactionStatus).toHaveBeenCalledWith(
+      expect(linkQuService.checkTransactionStatus).toHaveBeenCalledWith(
         'TRX-20260805-0001',
       );
       expect(result.admin_fee).toBe('5000.00');
     });
 
-    it('does not call Duitku and returns a null fee for a transaction with no duitku_reference', async () => {
+    it('does not call LinkQu and returns a null fee for a transaction with no linkqu_reference', async () => {
       transactionsService.findByExternalId.mockResolvedValue({
         id: 'TRX-20260805-0002',
         paymentStatus: PaymentStatus.PENDING,
         providerStatus: null,
-        duitkuReference: null,
+        linkQuReference: null,
         grossAmount: '10000.00',
         product: null,
         createdAt: new Date(),
@@ -170,24 +166,24 @@ describe('TopupService', () => {
 
       const result = await service.getTransactionStatus('TRX-20260805-0002');
 
-      expect(duitkuService.checkTransactionStatus).not.toHaveBeenCalled();
+      expect(linkQuService.checkTransactionStatus).not.toHaveBeenCalled();
       expect(result.admin_fee).toBeNull();
     });
 
-    it('degrades gracefully to a null fee if the Duitku fee lookup fails', async () => {
+    it('degrades gracefully to a null fee if the LinkQu fee lookup fails', async () => {
       transactionsService.findByExternalId.mockResolvedValue({
         id: 'TRX-20260805-0003',
         paymentStatus: PaymentStatus.PAID,
         providerStatus: null,
-        duitkuReference: 'DS3460326DEF',
+        linkQuReference: 'DS3460326DEF',
         grossAmount: '10000.00',
         product: null,
         createdAt: new Date(),
         paidAt: new Date(),
         completedAt: new Date(),
       } as any);
-      duitkuService.checkTransactionStatus.mockRejectedValue(
-        new Error('Duitku transactionStatus request failed: HTTP 500'),
+      linkQuService.checkTransactionStatus.mockRejectedValue(
+        new Error('LinkQu checkstatus request failed: HTTP 500'),
       );
 
       const result = await service.getTransactionStatus('TRX-20260805-0003');
@@ -197,42 +193,16 @@ describe('TopupService', () => {
     });
   });
 
-  describe('getPaymentMethodsForProduct', () => {
-    it("looks up the product's own selling price, never a client-supplied amount", async () => {
-      productsService.findActiveByIdOrFail.mockResolvedValue(product);
-      duitkuService.getPaymentMethods.mockResolvedValue([
-        {
-          paymentMethod: 'BC',
-          paymentName: 'BCA VA',
-          paymentImage: 'https://images.duitku.com/hotlink-ok/BCA.SVG',
-          totalFee: '5000',
-        },
-      ]);
-
-      const result = await service.getPaymentMethodsForProduct('1');
-
-      expect(duitkuService.getPaymentMethods).toHaveBeenCalledWith(20000);
-      expect(result).toEqual([
-        {
-          payment_method: 'BC',
-          payment_name: 'BCA VA',
-          payment_image: 'https://images.duitku.com/hotlink-ok/BCA.SVG',
-          total_fee: '5000',
-        },
-      ]);
-    });
-  });
-
   describe('checkout', () => {
-    it('creates a pending transaction, requests a Duitku invoice, and attaches it', async () => {
+    it('creates a pending transaction, requests a LinkQu payment link, and attaches it', async () => {
       productsService.findActiveByIdOrFail.mockResolvedValue(product);
       transactionsService.createPending.mockResolvedValue({
         id: 'TRX-20260805-0001',
       } as any);
-      duitkuService.createInvoice.mockResolvedValue({
-        invoiceId: 'D7999PJ38HNY7TSKHSGX',
+      linkQuService.createInvoice.mockResolvedValue({
+        invoiceId: '715',
         invoiceUrl:
-          'https://app-sandbox.duitku.com/checkout/D7999PJ38HNY7TSKHSGX',
+          'https://cognos.linkqu.id/pay/0945572d-116b-4fc8-aa05-c43caa358491',
         status: '00',
       });
 
@@ -249,20 +219,20 @@ describe('TopupService', () => {
         targetZoneId: '99',
         referralCode: 'AFF123',
       });
-      expect(duitkuService.createInvoice).toHaveBeenCalledWith({
+      expect(linkQuService.createInvoice).toHaveBeenCalledWith({
         externalId: 'TRX-20260805-0001',
         amount: 20000,
         description: 'Top-up 120 Diamonds for 1',
       });
-      expect(transactionsService.attachDuitkuReference).toHaveBeenCalledWith(
+      expect(transactionsService.attachLinkQuReference).toHaveBeenCalledWith(
         'TRX-20260805-0001',
-        'D7999PJ38HNY7TSKHSGX',
+        '715',
       );
       expect(result).toEqual({
         transaction_id: 'TRX-20260805-0001',
-        duitku_reference: 'D7999PJ38HNY7TSKHSGX',
+        linkqu_reference: '715',
         invoice_url:
-          'https://app-sandbox.duitku.com/checkout/D7999PJ38HNY7TSKHSGX',
+          'https://cognos.linkqu.id/pay/0945572d-116b-4fc8-aa05-c43caa358491',
       });
     });
   });
@@ -285,8 +255,8 @@ describe('TopupService', () => {
         success: true,
         response: '{"mock":true}',
       });
-      duitkuService.checkTransactionStatus.mockResolvedValue({
-        statusCode: '00',
+      linkQuService.checkTransactionStatus.mockResolvedValue({
+        statusCode: 'success',
         statusMessage: 'SUCCESS',
         fee: '1000.00',
       });
@@ -312,11 +282,11 @@ describe('TopupService', () => {
         grossAmount: '20000.00',
         baseCost: '15000',
         commissionPaid: '0.00',
-        duitkuFee: '1000.00',
+        providerFee: '1000.00',
       });
     });
 
-    it('credits platform revenue with fee=0 if the Duitku fee lookup fails, without blocking the coin injection already recorded', async () => {
+    it('credits platform revenue with fee=0 if the LinkQu fee lookup fails, without blocking the coin injection already recorded', async () => {
       const transaction = {
         id: 'TRX-20260805-0010',
         paymentStatus: PaymentStatus.PENDING,
@@ -333,8 +303,8 @@ describe('TopupService', () => {
         success: true,
         response: '{"mock":true}',
       });
-      duitkuService.checkTransactionStatus.mockRejectedValue(
-        new Error('Duitku transactionStatus request failed: HTTP 500'),
+      linkQuService.checkTransactionStatus.mockRejectedValue(
+        new Error('LinkQu checkstatus request failed: HTTP 500'),
       );
 
       await service.handleInvoicePaid('TRX-20260805-0010');
@@ -344,7 +314,7 @@ describe('TopupService', () => {
         grossAmount: '20000.00',
         baseCost: '15000',
         commissionPaid: '0.00',
-        duitkuFee: '0.00',
+        providerFee: '0.00',
       });
     });
 
@@ -366,8 +336,8 @@ describe('TopupService', () => {
         response: '{"mock":true}',
       });
       creditCommissionMock.mockResolvedValue('2000.00');
-      duitkuService.checkTransactionStatus.mockResolvedValue({
-        statusCode: '00',
+      linkQuService.checkTransactionStatus.mockResolvedValue({
+        statusCode: 'success',
         statusMessage: 'SUCCESS',
         fee: '1000.00',
       });
@@ -384,7 +354,7 @@ describe('TopupService', () => {
         grossAmount: '20000.00',
         baseCost: '15000',
         commissionPaid: '2000.00',
-        duitkuFee: '1000.00',
+        providerFee: '1000.00',
       });
     });
 

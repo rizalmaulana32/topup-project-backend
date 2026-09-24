@@ -61,12 +61,12 @@ export class Transaction {
   affiliateCommission: string | null;
 
   @Column({
-    name: 'duitku_reference',
+    name: 'linkqu_reference',
     type: 'varchar',
     unique: true,
     nullable: true,
   })
-  duitkuReference: string | null;
+  linkQuReference: string | null;
 
   @Column({
     name: 'payment_status',

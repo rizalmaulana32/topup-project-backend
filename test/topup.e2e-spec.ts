@@ -14,24 +14,24 @@ import {
   ProviderStatus,
   Transaction,
 } from '../src/transactions/entities/transaction.entity';
-import { DuitkuService } from '../src/duitku/duitku.service';
+import { LinkQuService } from '../src/linkqu/linkqu.service';
 
 /**
  * Exercises the full customer top-up purchase flow (check-id -> checkout ->
- * Duitku invoice callback -> mock coin injection) against a real Postgres
+ * LinkQu payment callback -> mock coin injection) against a real Postgres
  * database (via TypeOrmModule, see development/backend/docker-compose.yml).
- * DuitkuService is overridden with a deterministic double because this
- * environment has no real Duitku credentials; the mock Provider Top-Up
+ * LinkQuService is overridden with a deterministic double because this
+ * environment has no real LinkQu credentials; the mock Provider Top-Up
  * service is left as the real implementation since it is already
  * deterministic and is the boundary this slice is meant to validate.
  */
 const TEST_SIGNATURE = 'e2e-test-signature';
 
-class FakeDuitkuService {
+class FakeLinkQuService {
   createInvoice(params: { externalId: string }) {
     return Promise.resolve({
       invoiceId: `fake-reference-${params.externalId}`,
-      invoiceUrl: `https://app-sandbox.duitku.com/checkout/fake-reference-${params.externalId}`,
+      invoiceUrl: `https://cognos.linkqu.id/pay/fake-reference-${params.externalId}`,
       status: '00',
     });
   }
@@ -53,8 +53,8 @@ describe('Topup (e2e)', () => {
     const moduleFixture: TestingModule = await Test.createTestingModule({
       imports: [AppModule],
     })
-      .overrideProvider(DuitkuService)
-      .useClass(FakeDuitkuService)
+      .overrideProvider(LinkQuService)
+      .useClass(FakeLinkQuService)
       .compile();
 
     app = moduleFixture.createNestApplication();
@@ -158,7 +158,7 @@ describe('Topup (e2e)', () => {
       .expect(404);
   });
 
-  it('runs the full checkout -> Duitku callback -> coin injection path', async () => {
+  it('runs the full checkout -> LinkQu callback -> coin injection path', async () => {
     const checkoutResponse = await request(app.getHttpServer())
       .post('/api/v1/topup/checkout')
       .send({
@@ -172,13 +172,13 @@ describe('Topup (e2e)', () => {
       success: boolean;
       data: {
         transaction_id: string;
-        duitku_reference: string;
+        linkqu_reference: string;
         invoice_url: string;
       };
     };
-    const { transaction_id, duitku_reference, invoice_url } = body.data;
+    const { transaction_id, linkqu_reference, invoice_url } = body.data;
     expect(transaction_id).toMatch(/^TRX-\d{8}-\d{4}$/);
-    expect(duitku_reference).toBe(`fake-reference-${transaction_id}`);
+    expect(linkqu_reference).toBe(`fake-reference-${transaction_id}`);
     expect(invoice_url).toContain(transaction_id);
 
     const pendingTransaction = await transactionRepository.findOne({
@@ -187,17 +187,17 @@ describe('Topup (e2e)', () => {
     expect(pendingTransaction?.paymentStatus).toBe(PaymentStatus.PENDING);
 
     await request(app.getHttpServer())
-      .post('/api/v1/webhooks/duitku/invoice')
-      .type('form')
+      .post('/api/v1/webhooks/linkqu/payment')
       .send({
-        merchantOrderId: transaction_id,
-        amount: '20000',
-        resultCode: '00',
-        reference: duitku_reference,
+        partner_reff: transaction_id,
+        amount: 20000,
+        va_number: '7136490000031689',
+        username: 'LI307GXIN',
+        status: 'SUCCESS',
         signature: TEST_SIGNATURE,
       })
       .expect(200)
-      .expect({ success: true });
+      .expect({ response: 'OK' });
 
     const paidTransaction = await transactionRepository.findOne({
       where: { id: transaction_id },
@@ -229,7 +229,7 @@ describe('Topup (e2e)', () => {
     );
   });
 
-  it('marks a transaction failed on a non-success Duitku callback resultCode', async () => {
+  it('marks a transaction failed on a non-success LinkQu callback status', async () => {
     const checkoutResponse = await request(app.getHttpServer())
       .post('/api/v1/topup/checkout')
       .send({
@@ -240,22 +240,22 @@ describe('Topup (e2e)', () => {
       .expect(201);
 
     const body = checkoutResponse.body as {
-      data: { transaction_id: string; duitku_reference: string };
+      data: { transaction_id: string; linkqu_reference: string };
     };
-    const { transaction_id, duitku_reference } = body.data;
+    const { transaction_id } = body.data;
 
     await request(app.getHttpServer())
-      .post('/api/v1/webhooks/duitku/invoice')
-      .type('form')
+      .post('/api/v1/webhooks/linkqu/payment')
       .send({
-        merchantOrderId: transaction_id,
-        amount: '20000',
-        resultCode: '01',
-        reference: duitku_reference,
+        partner_reff: transaction_id,
+        amount: 20000,
+        va_number: '7136490000031689',
+        username: 'LI307GXIN',
+        status: 'FAILED',
         signature: TEST_SIGNATURE,
       })
       .expect(200)
-      .expect({ success: true });
+      .expect({ response: 'OK' });
 
     const failedTransaction = await transactionRepository.findOne({
       where: { id: transaction_id },
@@ -263,14 +263,15 @@ describe('Topup (e2e)', () => {
     expect(failedTransaction?.paymentStatus).toBe(PaymentStatus.FAILED);
   });
 
-  it('rejects a Duitku callback with an invalid signature', async () => {
+  it('rejects a LinkQu callback with an invalid signature', async () => {
     await request(app.getHttpServer())
-      .post('/api/v1/webhooks/duitku/invoice')
-      .type('form')
+      .post('/api/v1/webhooks/linkqu/payment')
       .send({
-        merchantOrderId: 'TRX-doesnotmatter',
-        amount: '20000',
-        resultCode: '00',
+        partner_reff: 'TRX-doesnotmatter',
+        amount: 20000,
+        va_number: '7136490000031689',
+        username: 'LI307GXIN',
+        status: 'SUCCESS',
         signature: 'wrong-signature',
       })
       .expect(401);

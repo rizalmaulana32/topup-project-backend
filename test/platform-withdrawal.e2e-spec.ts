@@ -6,7 +6,7 @@ import request from 'supertest';
 import { App } from 'supertest/types';
 import { Repository } from 'typeorm';
 import { AppModule } from '../src/app.module';
-import { DuitkuService } from '../src/duitku/duitku.service';
+import { LinkQuService } from '../src/linkqu/linkqu.service';
 import {
   PlatformRevenueLog,
   PlatformRevenueLogType,
@@ -25,18 +25,18 @@ import { User, UserRole, UserStatus } from '../src/users/entities/user.entity';
 /**
  * Exercises the platform's own revenue ledger and withdrawal lifecycle
  * (a purchase credits platform_settings.platform_balance -> superadmin
- * withdraws to their own bank account on file -> real-synchronous Duitku
- * disbursement, mirroring the affiliate withdrawal flow in
+ * withdraws to their own bank account on file -> LinkQu disbursement,
+ * mirroring the affiliate withdrawal flow in
  * commission-and-withdrawal.e2e-spec.ts) against a real Postgres database.
  */
 const TEST_SIGNATURE = 'e2e-test-signature';
 const failingPayoutReferenceIds = new Set<string>();
 
-class FakeDuitkuService {
+class FakeLinkQuService {
   createInvoice(params: { externalId: string }) {
     return Promise.resolve({
       invoiceId: `fake-reference-${params.externalId}`,
-      invoiceUrl: `https://app-sandbox.duitku.com/checkout/fake-reference-${params.externalId}`,
+      invoiceUrl: `https://cognos.linkqu.id/pay/fake-reference-${params.externalId}`,
       status: '00',
     });
   }
@@ -48,6 +48,7 @@ class FakeDuitkuService {
         payoutId: null,
         responseCode: '01',
         responseDesc: 'Insufficient funds',
+        status: 'FAILED' as const,
       });
     }
     return Promise.resolve({
@@ -55,6 +56,7 @@ class FakeDuitkuService {
       payoutId: `fake-payout-${params.referenceId}`,
       responseCode: '00',
       responseDesc: 'Success',
+      status: 'PAID' as const,
     });
   }
 
@@ -89,8 +91,8 @@ describe('Platform revenue and withdrawal (e2e)', () => {
     const moduleFixture: TestingModule = await Test.createTestingModule({
       imports: [AppModule],
     })
-      .overrideProvider(DuitkuService)
-      .useClass(FakeDuitkuService)
+      .overrideProvider(LinkQuService)
+      .useClass(FakeLinkQuService)
       .compile();
 
     app = moduleFixture.createNestApplication();
@@ -166,12 +168,13 @@ describe('Platform revenue and withdrawal (e2e)', () => {
     const transactionId = checkoutBody.data.transaction_id;
 
     await request(app.getHttpServer())
-      .post('/api/v1/webhooks/duitku/invoice')
-      .type('form')
+      .post('/api/v1/webhooks/linkqu/payment')
       .send({
-        merchantOrderId: transactionId,
-        amount: '2000000',
-        resultCode: '00',
+        partner_reff: transactionId,
+        amount: 2000000,
+        va_number: '7136490000031689',
+        username: 'LI307GXIN',
+        status: 'SUCCESS',
         signature: TEST_SIGNATURE,
       })
       .expect(200);
@@ -268,10 +271,10 @@ describe('Platform revenue and withdrawal (e2e)', () => {
       .set('Authorization', `Bearer ${superadminToken}`)
       .expect(201);
     const approveBody = approveResponse.body as {
-      data: { status: string; duitku_disbursement_id: string };
+      data: { status: string; linkqu_disbursement_id: string };
     };
     expect(approveBody.data.status).toBe(PlatformWithdrawalStatus.PAID);
-    expect(approveBody.data.duitku_disbursement_id).toBe(
+    expect(approveBody.data.linkqu_disbursement_id).toBe(
       `fake-payout-${pending.id}`,
     );
 
@@ -339,7 +342,7 @@ describe('Platform revenue and withdrawal (e2e)', () => {
     expect(settings.platformBalance).toBe('300000.00');
   });
 
-  it('rejects a platform withdrawal request and refunds the balance without contacting Duitku', async () => {
+  it('rejects a platform withdrawal request and refunds the balance without contacting LinkQu', async () => {
     const requestResponse = await request(app.getHttpServer())
       .post('/api/v1/admin/platform/withdraw')
       .set('Authorization', `Bearer ${superadminToken}`)

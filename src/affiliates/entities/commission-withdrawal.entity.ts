@@ -15,8 +15,9 @@ export enum WithdrawalStatus {
   PAID = 'paid',
   /**
    * Not in the source document's ERD (pending, approved, rejected, paid)
-   * but needed to distinguish an admin-rejected request (never sent to
-   * Duitku) from a Duitku disbursement that was sent and came back failed.
+   * but needed to distinguish an admin-rejected request (never sent to the
+   * payout provider) from a disbursement that was sent and came back
+   * failed.
    */
   FAILED = 'failed',
 }
@@ -53,12 +54,12 @@ export class CommissionWithdrawal {
   status: WithdrawalStatus;
 
   @Column({
-    name: 'duitku_disbursement_id',
+    name: 'linkqu_disbursement_id',
     type: 'varchar',
     unique: true,
     nullable: true,
   })
-  duitkuDisbursementId: string | null;
+  linkQuDisbursementId: string | null;
 
   @Column({ name: 'admin_notes', type: 'varchar', nullable: true })
   adminNotes: string | null;

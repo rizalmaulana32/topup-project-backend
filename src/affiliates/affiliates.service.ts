@@ -18,7 +18,7 @@ import { Transaction } from '../transactions/entities/transaction.entity';
 import { TransactionsService } from '../transactions/transactions.service';
 import { User, UserRole, UserStatus } from '../users/entities/user.entity';
 import { UsersService } from '../users/users.service';
-import { DuitkuService } from '../duitku/duitku.service';
+import { LinkQuService } from '../linkqu/linkqu.service';
 import { RegisterAffiliateDto } from './dto/register-affiliate.dto';
 import { AffiliatorProfile } from './entities/affiliator-profile.entity';
 import {
@@ -49,7 +49,7 @@ export class AffiliatesService {
     private readonly usersService: UsersService,
     private readonly transactionsService: TransactionsService,
     private readonly settingsService: SettingsService,
-    private readonly duitkuService: DuitkuService,
+    private readonly linkQuService: LinkQuService,
   ) {}
 
   async register(dto: RegisterAffiliateDto) {
@@ -302,8 +302,8 @@ export class AffiliatesService {
   /**
    * Locks the requested amount immediately (balance -= amount) and records
    * the debit ledger entry at this point, matching the source document's
-   * "Kunci Nominal Saldo" step. A later Duitku failure callback refunds
-   * the balance with a corrective credit entry; a success callback needs
+   * "Kunci Nominal Saldo" step. A later LinkQu failure/callback refunds
+   * the balance with a corrective credit entry; a success outcome needs
    * no further ledger entry since the debit is already accurate.
    */
   async requestWithdrawal(
@@ -400,13 +400,15 @@ export class AffiliatesService {
   }
 
   /**
-   * Approves a withdrawal and sends it to Duitku. Unlike the old
-   * Xendit Payout flow, Duitku's Transfer Online has no callback - the
-   * disbursement call itself resolves synchronously with the final
-   * outcome, so this method knows immediately whether the withdrawal was
-   * actually paid and updates its status right away (PAID or, on
-   * failure, FAILED-with-refund) instead of parking it in `approved` to
-   * wait for a webhook that will never arrive.
+   * Approves a withdrawal and sends it to LinkQu. Unlike Duitku's Transfer
+   * Online (always resolved synchronously, no callback), LinkQu's
+   * withdraw/payment can genuinely come back PENDING per LinkQu's own
+   * documented handling rules - in that case the withdrawal is parked in
+   * `approved` (previously dead code under Duitku, now live) and resolved
+   * later by the real LinkQu disbursement callback (see
+   * handleDisbursementCallback) or a future reconciliation poll. An
+   * immediate SUCCESS or FAILED result still resolves right away, same as
+   * the old Duitku UX for the common case.
    */
   async approveWithdrawal(
     withdrawalId: string,
@@ -420,7 +422,7 @@ export class AffiliatesService {
       );
     }
 
-    const payout = await this.duitkuService.createPayout({
+    const payout = await this.linkQuService.createPayout({
       referenceId: withdrawal.id,
       amount: Number(withdrawal.amount),
       bankName: withdrawal.bankName,
@@ -429,27 +431,32 @@ export class AffiliatesService {
       description: `Commission withdrawal ${withdrawal.id}`,
     });
 
-    withdrawal.duitkuDisbursementId = payout.payoutId;
+    withdrawal.linkQuDisbursementId = payout.payoutId;
     withdrawal.processedBy = adminUserId;
     withdrawal.processedAt = new Date();
 
-    if (payout.success) {
+    if (payout.status === 'PAID') {
       withdrawal.status = WithdrawalStatus.PAID;
+      return this.withdrawalRepository.save(withdrawal);
+    }
+
+    if (payout.status === 'PENDING') {
+      withdrawal.status = WithdrawalStatus.APPROVED;
       return this.withdrawalRepository.save(withdrawal);
     }
 
     await this.withdrawalRepository.save(withdrawal);
     await this.refundFailedWithdrawal(
       withdrawal,
-      `Duitku disbursement failed: ${payout.responseDesc} (${payout.responseCode})`,
+      `LinkQu disbursement failed: ${payout.responseDesc} (${payout.responseCode})`,
     );
     return this.findWithdrawalByIdOrFail(withdrawalId);
   }
 
   /**
-   * Declines a withdrawal before it's ever sent to Duitku (e.g. bad bank
+   * Declines a withdrawal before it's ever sent to LinkQu (e.g. bad bank
    * details, suspected fraud) and refunds the locked balance. Distinct from
-   * a Duitku-side failure, which happens after approval.
+   * a LinkQu-side failure, which happens after approval.
    */
   async rejectWithdrawal(
     withdrawalId: string,
@@ -512,17 +519,17 @@ export class AffiliatesService {
   }
 
   /**
-   * Called by the Duitku disbursement callback controller. Not reachable
-   * in practice for the Transfer Online flow this app currently uses (it
-   * has no callback - approveWithdrawal resolves the outcome synchronously
-   * and calls refundFailedWithdrawal directly on failure). Kept for the
-   * "Clearing" disbursement product, which does have a documented
-   * callback, in case this app ever needs it. Idempotent: a withdrawal not
-   * in `approved` status is ignored (already handled, or never sent).
+   * Called by the LinkQu disbursement callback controller once the
+   * callback signature has already been verified. Now genuinely reachable
+   * (unlike under Duitku, which had no callback at all for the product
+   * this app used) - a withdrawal that approveWithdrawal parked in
+   * `approved` because LinkQu returned PENDING gets resolved here.
+   * Idempotent: a withdrawal not in `approved` status is ignored (already
+   * resolved synchronously, or never sent).
    */
   async handleDisbursementCallback(
     referenceId: string,
-    duitkuStatusCode: string,
+    linkQuStatus: string,
   ): Promise<void> {
     const withdrawal = await this.withdrawalRepository.findOne({
       where: { id: referenceId },
@@ -530,7 +537,7 @@ export class AffiliatesService {
 
     if (!withdrawal) {
       this.logger.warn(
-        `Duitku disbursement callback for unknown withdrawal ${referenceId}`,
+        `LinkQu disbursement callback for unknown withdrawal ${referenceId}`,
       );
       return;
     }
@@ -541,22 +548,22 @@ export class AffiliatesService {
       return;
     }
 
-    if (duitkuStatusCode === '00') {
+    if (linkQuStatus === 'SUCCESS') {
       withdrawal.status = WithdrawalStatus.PAID;
       await this.withdrawalRepository.save(withdrawal);
       return;
     }
 
-    if (duitkuStatusCode !== '01') {
+    if (linkQuStatus !== 'FAILED') {
       this.logger.log(
-        `Duitku disbursement callback for ${referenceId} with non-final status ${duitkuStatusCode} - no action taken.`,
+        `LinkQu disbursement callback for ${referenceId} with non-final status ${linkQuStatus} - no action taken.`,
       );
       return;
     }
 
     await this.refundFailedWithdrawal(
       withdrawal,
-      `Duitku disbursement failed (Duitku status: ${duitkuStatusCode})`,
+      `LinkQu disbursement failed (LinkQu status: ${linkQuStatus})`,
     );
   }
 

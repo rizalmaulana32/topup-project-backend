@@ -8,7 +8,7 @@ import {
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Repository } from 'typeorm';
 import { generateOrderId } from '../common/utils/id-generator.util';
-import { DuitkuService } from '../duitku/duitku.service';
+import { LinkQuService } from '../linkqu/linkqu.service';
 import { PlatformSettings } from '../settings/entities/platform-settings.entity';
 import {
   PlatformRevenueLog,
@@ -34,38 +34,39 @@ export class PlatformService {
     private readonly withdrawalRepository: Repository<PlatformWithdrawal>,
     @InjectDataSource()
     private readonly dataSource: DataSource,
-    private readonly duitkuService: DuitkuService,
+    private readonly linkQuService: LinkQuService,
   ) {}
 
   /**
    * Credits the platform's own revenue for a successfully fulfilled
    * transaction: sellingPrice (grossAmount) minus the product's cost
-   * (baseCost) minus whatever commission was paid out on it minus
-   * Duitku's own transaction fee (duitkuFee). Called from
+   * (baseCost) minus whatever commission was paid out on it minus the
+   * payment provider's own transaction fee (providerFee - was Duitku's fee,
+   * now LinkQu's, via the same checkTransactionStatus-equivalent lookup in
+   * TopupService.handleInvoicePaid). Called from
    * TopupService.handleInvoicePaid for every successful injection,
    * regardless of whether the transaction had a referral code (commissionPaid
    * is "0.00" when there wasn't one). Uses the same pessimistic-lock
    * pattern as AffiliatesService.creditCommissionForTransaction.
    *
-   * duitkuFee was missing entirely until 2026-09-08 (client-reported: the
-   * platform balance never matched Duitku's real numbers) - this ledger
-   * was silently overstating revenue by Duitku's own cut on every single
-   * transaction (a real, non-trivial fee - confirmed "5000.00" on a
-   * "10000.00" sandbox transaction via checkTransactionStatus). Past
-   * credits made before this fix are NOT retroactively corrected here.
+   * The provider-fee subtraction was missing entirely until 2026-09-08
+   * (client-reported: the platform balance never matched Duitku's real
+   * numbers) - this ledger was silently overstating revenue by the
+   * provider's own cut on every single transaction. Past credits made
+   * before that fix are NOT retroactively corrected here.
    */
   async creditRevenueForTransaction(params: {
     transactionId: string;
     grossAmount: string;
     baseCost: string;
     commissionPaid: string;
-    duitkuFee: string;
+    providerFee: string;
   }): Promise<void> {
     const revenue =
       Number(params.grossAmount) -
       Number(params.baseCost) -
       Number(params.commissionPaid) -
-      Number(params.duitkuFee);
+      Number(params.providerFee);
 
     const queryRunner = this.dataSource.createQueryRunner();
     await queryRunner.connect();
@@ -92,7 +93,7 @@ export class PlatformService {
         type: PlatformRevenueLogType.CREDIT,
         amount: revenue.toFixed(2),
         balanceAfter: newBalance.toFixed(2),
-        description: `Platform revenue for transaction ${params.transactionId} (gross ${params.grossAmount} - cost ${params.baseCost} - commission ${params.commissionPaid} - duitku fee ${params.duitkuFee})`,
+        description: `Platform revenue for transaction ${params.transactionId} (gross ${params.grossAmount} - cost ${params.baseCost} - commission ${params.commissionPaid} - provider fee ${params.providerFee})`,
       });
       await queryRunner.manager.save(log);
 
@@ -203,9 +204,10 @@ export class PlatformService {
   }
 
   /**
-   * Same synchronous-resolution pattern as
-   * AffiliatesService.approveWithdrawal - Duitku's Transfer Online has no
-   * callback, so the outcome is known immediately.
+   * Mirrors AffiliatesService.approveWithdrawal: LinkQu's withdraw/payment
+   * can genuinely return PENDING (unlike Duitku's always-synchronous
+   * Transfer Online), in which case the withdrawal is parked in `approved`
+   * and resolved later by handleDisbursementCallback.
    */
   async approveWithdrawal(
     withdrawalId: string,
@@ -219,7 +221,7 @@ export class PlatformService {
       );
     }
 
-    const payout = await this.duitkuService.createPayout({
+    const payout = await this.linkQuService.createPayout({
       referenceId: withdrawal.id,
       amount: Number(withdrawal.amount),
       bankName: withdrawal.bankName,
@@ -228,21 +230,72 @@ export class PlatformService {
       description: `Platform withdrawal ${withdrawal.id}`,
     });
 
-    withdrawal.duitkuDisbursementId = payout.payoutId;
+    withdrawal.linkQuDisbursementId = payout.payoutId;
     withdrawal.processedBy = adminUserId;
     withdrawal.processedAt = new Date();
 
-    if (payout.success) {
+    if (payout.status === 'PAID') {
       withdrawal.status = PlatformWithdrawalStatus.PAID;
+      return this.withdrawalRepository.save(withdrawal);
+    }
+
+    if (payout.status === 'PENDING') {
+      withdrawal.status = PlatformWithdrawalStatus.APPROVED;
       return this.withdrawalRepository.save(withdrawal);
     }
 
     await this.withdrawalRepository.save(withdrawal);
     await this.refundFailedWithdrawal(
       withdrawal,
-      `Duitku disbursement failed: ${payout.responseDesc} (${payout.responseCode})`,
+      `LinkQu disbursement failed: ${payout.responseDesc} (${payout.responseCode})`,
     );
     return this.findWithdrawalByIdOrFail(withdrawalId);
+  }
+
+  /**
+   * Called by the LinkQu disbursement callback controller once the
+   * callback signature has already been verified - resolves a platform
+   * withdrawal that approveWithdrawal parked in `approved`. Mirrors
+   * AffiliatesService.handleDisbursementCallback.
+   */
+  async handleDisbursementCallback(
+    referenceId: string,
+    linkQuStatus: string,
+  ): Promise<void> {
+    const withdrawal = await this.withdrawalRepository.findOne({
+      where: { id: referenceId },
+    });
+
+    if (!withdrawal) {
+      this.logger.warn(
+        `LinkQu disbursement callback for unknown platform withdrawal ${referenceId}`,
+      );
+      return;
+    }
+    if (withdrawal.status !== PlatformWithdrawalStatus.APPROVED) {
+      this.logger.warn(
+        `Duplicate/unexpected disbursement callback for platform withdrawal ${referenceId} (status: ${withdrawal.status}), ignoring.`,
+      );
+      return;
+    }
+
+    if (linkQuStatus === 'SUCCESS') {
+      withdrawal.status = PlatformWithdrawalStatus.PAID;
+      await this.withdrawalRepository.save(withdrawal);
+      return;
+    }
+
+    if (linkQuStatus !== 'FAILED') {
+      this.logger.log(
+        `LinkQu disbursement callback for platform withdrawal ${referenceId} with non-final status ${linkQuStatus} - no action taken.`,
+      );
+      return;
+    }
+
+    await this.refundFailedWithdrawal(
+      withdrawal,
+      `LinkQu disbursement failed (LinkQu status: ${linkQuStatus})`,
+    );
   }
 
   async rejectWithdrawal(
