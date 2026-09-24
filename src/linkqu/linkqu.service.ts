@@ -157,6 +157,15 @@ export class LinkQuService {
   private readonly pin: string;
   private readonly signatureKey: string;
   private readonly baseUrl: string;
+  /**
+   * Only the disbursement payment step accepts a per-request url_callback
+   * field per LinkQu's own docs - Payment Link creation does not, so
+   * checkout's callback URL must be configured on LinkQu's dashboard
+   * (cognos.linkqu.id) regardless of this setting. Optional and undefined
+   * by default so local/dev environments with no public URL don't send a
+   * bogus callback target.
+   */
+  private readonly disbursementCallbackUrl: string | undefined;
 
   constructor(private readonly configService: ConfigService) {
     this.clientId = this.configService.getOrThrow<string>('LINKQU_CLIENT_ID');
@@ -168,6 +177,12 @@ export class LinkQuService {
     this.signatureKey = this.configService.getOrThrow<string>(
       'LINKQU_SIGNATURE_KEY',
     );
+    const callbackBaseUrl = this.configService.get<string>(
+      'LINKQU_CALLBACK_BASE_URL',
+    );
+    this.disbursementCallbackUrl = callbackBaseUrl
+      ? `${callbackBaseUrl.replace(/\/$/, '')}/api/v1/webhooks/linkqu/disbursement`
+      : undefined;
 
     const isProduction =
       this.configService.get<string>('LINKQU_MODE', 'development') ===
@@ -400,6 +415,9 @@ export class LinkQuService {
           inquiry_reff: inquiryReff,
           remark: params.description,
           signature: paymentSignature,
+          ...(this.disbursementCallbackUrl
+            ? { url_callback: this.disbursementCallbackUrl }
+            : {}),
         },
       );
 
