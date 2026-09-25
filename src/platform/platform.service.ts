@@ -84,7 +84,15 @@ export class PlatformService {
           platformBalance: '0',
         });
 
-      const newBalance = Number(settings.platformBalance) + revenue;
+      const rawNewBalance = Number(settings.platformBalance) + revenue;
+      const newBalance = Math.max(0, rawNewBalance);
+      if (rawNewBalance < 0) {
+        this.logger.warn(
+          `Platform balance would have gone negative (${rawNewBalance.toFixed(2)}) crediting revenue ${revenue.toFixed(2)} for transaction ${params.transactionId} ` +
+            `(gross ${params.grossAmount} - cost ${params.baseCost} - commission ${params.commissionPaid} - provider fee ${params.providerFee}). ` +
+            `Balance floored to 0 - this transaction likely sold below cost, check product pricing/fees.`,
+        );
+      }
       settings.platformBalance = newBalance.toFixed(2);
       await queryRunner.manager.save(settings);
 
