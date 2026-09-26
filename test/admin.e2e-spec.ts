@@ -211,6 +211,38 @@ describe('Admin (e2e)', () => {
     expect(user.status).toBe(UserStatus.INACTIVE);
   });
 
+  it('reject also deactivates an already-active affiliate, and approve reactivates them with the same referral code', async () => {
+    const beforeDeactivate = await profileRepository.findOneOrFail({
+      where: { id: pendingAffiliateProfileId },
+    });
+    const originalCode = beforeDeactivate.affiliateCode;
+    expect(originalCode).toMatch(/^AFF-/);
+
+    await request(app.getHttpServer())
+      .post(`/api/v1/admin/affiliates/${pendingAffiliateProfileId}/reject`)
+      .set('Authorization', `Bearer ${superadminToken}`)
+      .expect(201);
+
+    const deactivatedUser = await userRepository.findOneOrFail({
+      where: { email: 'pending1.e2e@example.com' },
+    });
+    expect(deactivatedUser.status).toBe(UserStatus.INACTIVE);
+
+    const reactivateResponse = await request(app.getHttpServer())
+      .post(`/api/v1/admin/affiliates/${pendingAffiliateProfileId}/approve`)
+      .set('Authorization', `Bearer ${superadminToken}`)
+      .expect(201);
+    const reactivateBody = reactivateResponse.body as {
+      data: { affiliate_code: string };
+    };
+    expect(reactivateBody.data.affiliate_code).toBe(originalCode);
+
+    const reactivatedUser = await userRepository.findOneOrFail({
+      where: { email: 'pending1.e2e@example.com' },
+    });
+    expect(reactivatedUser.status).toBe(UserStatus.ACTIVE);
+  });
+
   it('lists affiliates, optionally filtered by status', async () => {
     const allResponse = await request(app.getHttpServer())
       .get('/api/v1/admin/affiliates')
@@ -259,6 +291,32 @@ describe('Admin (e2e)', () => {
 
     const body = response.body as { data: { commission_rate: string } };
     expect(body.data.commission_rate).toBe('20.00');
+  });
+
+  it('soft-deletes an affiliate: hidden from listings, underlying user deactivated', async () => {
+    const deleteResponse = await request(app.getHttpServer())
+      .delete(`/api/v1/admin/affiliates/${secondPendingAffiliateProfileId}`)
+      .set('Authorization', `Bearer ${superadminToken}`)
+      .expect(200);
+    expect((deleteResponse.body as { success: boolean }).success).toBe(true);
+
+    const user = await userRepository.findOneOrFail({
+      where: { email: 'pending2.e2e@example.com' },
+    });
+    expect(user.status).toBe(UserStatus.INACTIVE);
+
+    const listResponse = await request(app.getHttpServer())
+      .get('/api/v1/admin/affiliates')
+      .set('Authorization', `Bearer ${superadminToken}`)
+      .expect(200);
+    const listBody = listResponse.body as {
+      data: { items: { profile_id: string }[] };
+    };
+    expect(
+      listBody.data.items.some(
+        (item) => item.profile_id === secondPendingAffiliateProfileId,
+      ),
+    ).toBe(false);
   });
 
   it('creates and updates a product', async () => {

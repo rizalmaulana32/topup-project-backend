@@ -94,6 +94,17 @@ describe('Topup (e2e)', () => {
     await app.close();
   });
 
+  it('reports an unknown affiliate code as invalid', async () => {
+    const response = await request(app.getHttpServer())
+      .get('/api/v1/topup/affiliate-code/NOTAREALCODE')
+      .expect(200);
+
+    expect(response.body).toEqual({
+      success: true,
+      data: { valid: false, affiliate_name: null },
+    });
+  });
+
   it('validates the target id via check-id', async () => {
     const response = await request(app.getHttpServer())
       .post('/api/v1/topup/check-id')

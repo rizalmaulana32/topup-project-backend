@@ -12,7 +12,12 @@ import {
   Req,
   UseGuards,
 } from '@nestjs/common';
-import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
+import {
+  ApiBearerAuth,
+  ApiOperation,
+  ApiParam,
+  ApiTags,
+} from '@nestjs/swagger';
 import { Request } from 'express';
 import { AffiliatesService } from '../affiliates/affiliates.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
@@ -91,7 +96,13 @@ export class AdminController {
 
   @Post('affiliates/:id/approve')
   @ApiOperation({
-    summary: 'Approve an affiliate and generate their referral code',
+    summary:
+      'Approve an affiliate and generate their referral code. Also usable to REACTIVATE a previously-rejected affiliate (keeps the same referral code, does not generate a new one).',
+  })
+  @ApiParam({
+    name: 'id',
+    description:
+      'The affiliate PROFILE ID (not user_id) - see profile_id in the GET /admin/affiliates response, listed side by side with user_id.',
   })
   async approveAffiliate(
     @Param('id') id: string,
@@ -109,14 +120,42 @@ export class AdminController {
   }
 
   @Post('affiliates/:id/reject')
-  @ApiOperation({ summary: 'Reject an affiliate registration' })
+  @ApiOperation({
+    summary:
+      'Reject a pending affiliate registration. Also usable to DEACTIVATE an already-approved/active affiliate at any time (sets status to inactive) - use POST .../approve on the same profile_id to reactivate them later.',
+  })
+  @ApiParam({
+    name: 'id',
+    description:
+      'The affiliate PROFILE ID (not user_id) - see profile_id in the GET /admin/affiliates response, listed side by side with user_id.',
+  })
   async rejectAffiliate(@Param('id') id: string) {
     await this.affiliatesService.reject(id);
     return { success: true };
   }
 
+  @Delete('affiliates/:id')
+  @ApiOperation({
+    summary:
+      'Soft-delete an affiliate (hidden from listings and dashboard access, underlying user deactivated; not removed from the database - historical commission/withdrawal records referencing this affiliate remain intact and traceable)',
+  })
+  @ApiParam({
+    name: 'id',
+    description:
+      'The affiliate PROFILE ID (not user_id) - see profile_id in the GET /admin/affiliates response, listed side by side with user_id.',
+  })
+  async deleteAffiliate(@Param('id') id: string) {
+    await this.affiliatesService.softDelete(id);
+    return { success: true };
+  }
+
   @Patch('affiliates/:id/commission-rate')
   @ApiOperation({ summary: "Override one affiliate's commission rate" })
+  @ApiParam({
+    name: 'id',
+    description:
+      'The affiliate PROFILE ID (not user_id) - see profile_id in the GET /admin/affiliates response, listed side by side with user_id.',
+  })
   async updateAffiliateCommissionRate(
     @Param('id') id: string,
     @Body() dto: UpdateCommissionRateDto,

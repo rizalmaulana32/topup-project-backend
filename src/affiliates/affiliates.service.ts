@@ -164,6 +164,47 @@ export class AffiliatesService {
     await this.usersService.updateStatus(profile.userId, UserStatus.INACTIVE);
   }
 
+  /**
+   * Soft-deletes an affiliate profile and deactivates the underlying user,
+   * mirroring the existing soft-delete pattern used for products/contact
+   * messages (deleted_at, excluded from normal find/findOne automatically).
+   * Kept as soft delete rather than hard delete since commission_logs and
+   * commission_withdrawals reference affiliator_id - hard-deleting would
+   * either violate no real FK constraint (they're plain columns, not
+   * enforced relations) but would still orphan real financial history for
+   * no reason. The referral code is intentionally left in place (not
+   * cleared) so historical transactions/commission_logs referencing it
+   * remain traceable.
+   */
+  async softDelete(profileId: string): Promise<void> {
+    const profile = await this.findProfileByIdOrFail(profileId);
+    await this.usersService.updateStatus(profile.userId, UserStatus.INACTIVE);
+    await this.profileRepository.softDelete(profileId);
+  }
+
+  /**
+   * Checks whether a given affiliate/referral code is currently valid -
+   * i.e. it exists AND the owning affiliate's account is active. Mirrors
+   * the exact same check creditCommissionForTransaction uses internally
+   * (referralCode match + user.status === ACTIVE), so "valid" here means
+   * precisely "would actually earn commission if used at checkout right
+   * now", not just "this code was issued at some point".
+   */
+  async checkCodeValidity(
+    code: string,
+  ): Promise<{ valid: boolean; affiliateName: string | null }> {
+    const profile = await this.profileRepository.findOne({
+      where: { affiliateCode: code },
+      relations: { user: true },
+    });
+
+    if (!profile || profile.user.status !== UserStatus.ACTIVE) {
+      return { valid: false, affiliateName: null };
+    }
+
+    return { valid: true, affiliateName: profile.user.name };
+  }
+
   async updateCommissionRate(
     profileId: string,
     commissionRate: number,

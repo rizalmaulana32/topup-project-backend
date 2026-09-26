@@ -30,6 +30,18 @@ export class TopupService {
     private readonly platformService: PlatformService,
   ) {}
 
+  /**
+   * Public check for whether an affiliate/referral code would actually
+   * earn commission if used at checkout right now - same criteria
+   * creditCommissionForTransaction uses internally (code exists AND the
+   * owning affiliate is active). Lets a checkout UI validate/show
+   * feedback on a referral code before the customer completes payment.
+   */
+  async validateAffiliateCode(code: string) {
+    const result = await this.affiliatesService.checkCodeValidity(code);
+    return { valid: result.valid, affiliate_name: result.affiliateName };
+  }
+
   async listActiveProducts() {
     const products = await this.productsService.findAllActive();
     return products.map((product) => ({

@@ -16,6 +16,16 @@ export class TopupController {
     return { success: true, data };
   }
 
+  @Get('affiliate-code/:code')
+  @ApiOperation({
+    summary:
+      'Check whether an affiliate/referral code is currently valid (exists and the affiliate is active) - use before checkout to validate a customer-entered code',
+  })
+  async validateAffiliateCode(@Param('code') code: string) {
+    const data = await this.topupService.validateAffiliateCode(code);
+    return { success: true, data };
+  }
+
   @Post('check-id')
   @ApiOperation({ summary: 'Validate a target game/user ID before checkout' })
   async checkId(@Body() dto: CheckIdDto) {

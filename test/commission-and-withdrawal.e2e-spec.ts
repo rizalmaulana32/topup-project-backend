@@ -207,6 +207,17 @@ describe('Commission crediting and withdrawal (e2e)', () => {
     await app.close();
   });
 
+  it('reports the real active affiliate code as valid, with the affiliate name', async () => {
+    const response = await request(app.getHttpServer())
+      .get(`/api/v1/topup/affiliate-code/${affiliateCode}`)
+      .expect(200);
+
+    expect(response.body).toEqual({
+      success: true,
+      data: { valid: true, affiliate_name: 'Commission Affiliate' },
+    });
+  });
+
   it('credits commission when a referred purchase is paid and injected', async () => {
     const checkoutResponse = await request(app.getHttpServer())
       .post('/api/v1/topup/checkout')
