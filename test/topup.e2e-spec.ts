@@ -274,6 +274,110 @@ describe('Topup (e2e)', () => {
     expect(failedTransaction?.paymentStatus).toBe(PaymentStatus.FAILED);
   });
 
+  it('runs the full custom-amount checkout -> LinkQu callback -> coin injection path', async () => {
+    const checkoutResponse = await request(app.getHttpServer())
+      .post('/api/v1/topup/checkout-custom')
+      .send({
+        amount: 25000,
+        target_user_id: '99887766',
+        target_zone_id: '4321',
+      })
+      .expect(201);
+
+    const body = checkoutResponse.body as {
+      success: boolean;
+      data: {
+        transaction_id: string;
+        coin_amount: number;
+        linkqu_reference: string;
+        invoice_url: string;
+      };
+    };
+    const { transaction_id, coin_amount, linkqu_reference, invoice_url } =
+      body.data;
+    expect(transaction_id).toMatch(/^TRX-\d{8}-\d{4}$/);
+    // amount=25000 is below the lowest bonus tier (350000) -> pays out 1:1
+    expect(coin_amount).toBe(25000);
+    expect(linkqu_reference).toBe(`fake-reference-${transaction_id}`);
+    expect(invoice_url).toContain(transaction_id);
+
+    await request(app.getHttpServer())
+      .post('/api/v1/webhooks/linkqu/payment')
+      .send({
+        partner_reff: transaction_id,
+        amount: 25000,
+        va_number: '7136490000031689',
+        username: 'LI307GXIN',
+        status: 'SUCCESS',
+        signature: TEST_SIGNATURE,
+      })
+      .expect(200)
+      .expect({ response: 'OK' });
+
+    const paidTransaction = await transactionRepository.findOne({
+      where: { id: transaction_id },
+    });
+    expect(paidTransaction?.paymentStatus).toBe(PaymentStatus.PAID);
+    expect(paidTransaction?.providerStatus).toBe(ProviderStatus.SUCCESS);
+    expect(paidTransaction?.coinAmount).toBe('25000.00');
+
+    const statusResponse = await request(app.getHttpServer())
+      .get(`/api/v1/topup/transactions/${transaction_id}`)
+      .expect(200);
+    const statusBody = statusResponse.body as {
+      data: { payment_status: string; product_name: string | null };
+    };
+    expect(statusBody.data.payment_status).toBe(PaymentStatus.PAID);
+    expect(statusBody.data.product_name).toBeNull();
+  });
+
+  it('rejects a custom-amount checkout below the minimum', async () => {
+    await request(app.getHttpServer())
+      .post('/api/v1/topup/checkout-custom')
+      .send({
+        amount: 5000,
+        target_user_id: '12345678',
+      })
+      .expect(400);
+  });
+
+  it('estimates coin from a given amount', async () => {
+    const response = await request(app.getHttpServer())
+      .get('/api/v1/topup/estimate')
+      .query({ amount: 500000 })
+      .expect(200);
+
+    expect(response.body).toEqual({
+      success: true,
+      data: { amount: 500000, coin_amount: 505000, bonus_coin: 5000 },
+    });
+  });
+
+  it('treats coin as an alias for amount - the typed number is the nominal paid, bonus added on top', async () => {
+    const response = await request(app.getHttpServer())
+      .get('/api/v1/topup/estimate')
+      .query({ coin: 370000 })
+      .expect(200);
+
+    expect(response.body).toEqual({
+      success: true,
+      data: { amount: 370000, coin_amount: 373500, bonus_coin: 3500 },
+    });
+  });
+
+  it('rejects an estimate request with neither amount nor coin', async () => {
+    await request(app.getHttpServer())
+      .get('/api/v1/topup/estimate')
+      .expect(400);
+  });
+
+  it('rejects an estimate request with both amount and coin', async () => {
+    await request(app.getHttpServer())
+      .get('/api/v1/topup/estimate')
+      .query({ amount: 25000, coin: 25000 })
+      .expect(400);
+  });
+
   it('rejects a LinkQu callback with an invalid signature', async () => {
     await request(app.getHttpServer())
       .post('/api/v1/webhooks/linkqu/payment')

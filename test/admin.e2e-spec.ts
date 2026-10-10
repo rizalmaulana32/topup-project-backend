@@ -157,27 +157,35 @@ describe('Admin (e2e)', () => {
       data: {
         global_commission_rate: string;
         minimum_withdrawal_amount: string;
+        custom_amount_margin_rate: string;
       };
     };
     expect(body.data.global_commission_rate).toBe('10.00');
     expect(body.data.minimum_withdrawal_amount).toBe('100000.00');
+    expect(body.data.custom_amount_margin_rate).toBe('0.00');
   });
 
-  it('updates platform settings', async () => {
+  it('updates platform settings, including the adjustable-checkout margin rate', async () => {
     const response = await request(app.getHttpServer())
       .patch('/api/v1/admin/settings')
       .set('Authorization', `Bearer ${superadminToken}`)
-      .send({ global_commission_rate: 12, minimum_withdrawal_amount: 50000 })
+      .send({
+        global_commission_rate: 12,
+        minimum_withdrawal_amount: 50000,
+        custom_amount_margin_rate: 15,
+      })
       .expect(200);
 
     const body = response.body as {
       data: {
         global_commission_rate: string;
         minimum_withdrawal_amount: string;
+        custom_amount_margin_rate: string;
       };
     };
     expect(body.data.global_commission_rate).toBe('12.00');
     expect(body.data.minimum_withdrawal_amount).toBe('50000.00');
+    expect(body.data.custom_amount_margin_rate).toBe('15.00');
   });
 
   it('approves a pending affiliate and generates a referral code', async () => {

@@ -18,6 +18,11 @@ export class UpdateSettingsDto {
   minimum_withdrawal_amount?: number;
 
   @IsOptional()
+  @IsNumber()
+  @Min(0)
+  custom_amount_margin_rate?: number;
+
+  @IsOptional()
   @IsString()
   @IsNotEmpty()
   admin_bank_name?: string;

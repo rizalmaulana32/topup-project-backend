@@ -27,6 +27,7 @@ export class SettingsService {
   async update(params: {
     globalCommissionRate?: number;
     minimumWithdrawalAmount?: number;
+    customAmountMarginRate?: number;
     adminBankName?: string;
     adminAccountNumber?: string;
     adminAccountHolder?: string;
@@ -39,6 +40,10 @@ export class SettingsService {
     if (params.minimumWithdrawalAmount !== undefined) {
       current.minimumWithdrawalAmount =
         params.minimumWithdrawalAmount.toFixed(2);
+    }
+    if (params.customAmountMarginRate !== undefined) {
+      current.customAmountMarginRate =
+        params.customAmountMarginRate.toFixed(2);
     }
     if (params.adminBankName !== undefined) {
       current.adminBankName = params.adminBankName;

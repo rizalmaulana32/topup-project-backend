@@ -32,12 +32,39 @@ export class Transaction {
   @PrimaryColumn()
   id: string;
 
-  @Column({ name: 'product_id' })
-  productId: string;
+  @Column({ name: 'product_id', nullable: true })
+  productId: string | null;
 
-  @ManyToOne(() => Product, { eager: true })
+  @ManyToOne(() => Product, { eager: true, nullable: true })
   @JoinColumn({ name: 'product_id' })
-  product: Product;
+  product: Product | null;
+
+  /**
+   * Coin payout for a custom-amount checkout (no product row) - null for
+   * fixed-catalog transactions, which derive coin from product instead.
+   */
+  @Column({
+    name: 'coin_amount',
+    type: 'decimal',
+    precision: 14,
+    scale: 2,
+    nullable: true,
+  })
+  coinAmount: string | null;
+
+  /**
+   * Rupiah-equivalent cost basis for a custom-amount checkout, valued at
+   * the MomoLive benchmark rate on the coin actually delivered - stands in
+   * for product.basePrice when computing platform revenue.
+   */
+  @Column({
+    name: 'cost_basis',
+    type: 'decimal',
+    precision: 14,
+    scale: 2,
+    nullable: true,
+  })
+  costBasis: string | null;
 
   @Column({ name: 'target_user_id' })
   targetUserId: string;

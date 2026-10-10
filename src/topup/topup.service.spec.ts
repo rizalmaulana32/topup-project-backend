@@ -1,8 +1,9 @@
-import { NotFoundException } from '@nestjs/common';
+import { BadRequestException, NotFoundException } from '@nestjs/common';
 import type { ProviderTopUpPort } from '../provider/provider-top-up.port';
 import { AffiliatesService } from '../affiliates/affiliates.service';
 import { PlatformService } from '../platform/platform.service';
 import { ProductsService } from '../products/products.service';
+import { SettingsService } from '../settings/settings.service';
 import { TransactionsService } from '../transactions/transactions.service';
 import { LinkQuService } from '../linkqu/linkqu.service';
 import { TopupService } from './topup.service';
@@ -25,6 +26,7 @@ describe('TopupService', () => {
     Pick<
       TransactionsService,
       | 'createPending'
+      | 'createPendingCustomAmount'
       | 'attachLinkQuReference'
       | 'findByExternalId'
       | 'markPaid'
@@ -44,6 +46,7 @@ describe('TopupService', () => {
   let platformService: jest.Mocked<
     Pick<PlatformService, 'creditRevenueForTransaction'>
   >;
+  let settingsService: jest.Mocked<Pick<SettingsService, 'get'>>;
   let service: TopupService;
 
   const product = {
@@ -71,9 +74,10 @@ describe('TopupService', () => {
     productsService = { findActiveByIdOrFail: jest.fn() };
     transactionsService = {
       createPending: jest.fn(),
+      createPendingCustomAmount: jest.fn(),
       attachLinkQuReference: jest.fn(),
       findByExternalId: jest.fn(),
-      markPaid: jest.fn(),
+      markPaid: jest.fn().mockResolvedValue(true),
       markExpired: jest.fn(),
       markFailed: jest.fn(),
       markProviderResult: jest.fn(),
@@ -90,6 +94,9 @@ describe('TopupService', () => {
     platformService = {
       creditRevenueForTransaction: creditRevenueMock,
     };
+    settingsService = {
+      get: jest.fn().mockResolvedValue({ customAmountMarginRate: '0' }),
+    };
 
     service = new TopupService(
       provider,
@@ -98,6 +105,7 @@ describe('TopupService', () => {
       linkQuService as unknown as LinkQuService,
       affiliatesService as unknown as AffiliatesService,
       platformService as unknown as PlatformService,
+      settingsService as unknown as SettingsService,
     );
   });
 
@@ -237,7 +245,215 @@ describe('TopupService', () => {
     });
   });
 
+  describe('estimateCustomAmount', () => {
+    it('derives coin_amount/bonus_coin from a given amount', async () => {
+      const result = await service.estimateCustomAmount({ amount: 500000 });
+
+      expect(result).toEqual({
+        amount: 500000,
+        coin_amount: 505000,
+        bonus_coin: 5000,
+      });
+    });
+
+    it('treats `coin` as an alias for `amount` - same forward calculation, not a reverse target', async () => {
+      const result = await service.estimateCustomAmount({ coin: 370000 });
+
+      // 370000 is itself the nominal (coin and rupiah are the same input
+      // by design) - it qualifies for the 350k tier -> +3500 bonus on top.
+      expect(result).toEqual({
+        amount: 370000,
+        coin_amount: 373500,
+        bonus_coin: 3500,
+      });
+    });
+
+    it('reads the margin rate from settings, same as checkout', async () => {
+      settingsService.get.mockResolvedValue({
+        customAmountMarginRate: '10',
+      } as any);
+
+      const result = await service.estimateCustomAmount({ amount: 25000 });
+
+      // full value = 25000 (no bonus); 10% cut -> floor(25000*0.9) = 22500
+      expect(result).toEqual({
+        amount: 25000,
+        coin_amount: 22500,
+        bonus_coin: 0,
+      });
+    });
+
+    it('rejects when neither amount nor coin is provided', async () => {
+      await expect(service.estimateCustomAmount({})).rejects.toBeInstanceOf(
+        BadRequestException,
+      );
+    });
+
+    it('rejects when both amount and coin are provided', async () => {
+      await expect(
+        service.estimateCustomAmount({ amount: 25000, coin: 25000 }),
+      ).rejects.toBeInstanceOf(BadRequestException);
+    });
+  });
+
+  describe('checkoutCustomAmount', () => {
+    it('pays out 1:1 (no bonus, no cut) below the lowest published tier, creates a pending transaction, and requests a LinkQu payment link for the full nominal amount', async () => {
+      transactionsService.createPendingCustomAmount.mockResolvedValue({
+        id: 'TRX-20260805-0020',
+      } as any);
+      linkQuService.createInvoice.mockResolvedValue({
+        invoiceId: '800',
+        invoiceUrl: 'https://cognos.linkqu.id/pay/custom-amount-test',
+        status: '00',
+      });
+
+      const result = await service.checkoutCustomAmount({
+        amount: 25000,
+        target_user_id: '1',
+        target_zone_id: '99',
+        affiliate_code: 'AFF123',
+      });
+
+      expect(
+        transactionsService.createPendingCustomAmount,
+      ).toHaveBeenCalledWith({
+        grossAmount: '25000',
+        coinAmount: '25000',
+        costBasis: '25000',
+        targetUserId: '1',
+        targetZoneId: '99',
+        referralCode: 'AFF123',
+      });
+      expect(linkQuService.createInvoice).toHaveBeenCalledWith({
+        externalId: 'TRX-20260805-0020',
+        amount: 25000,
+        description: 'Top-up 25000 coin for 1',
+      });
+      expect(result).toEqual({
+        transaction_id: 'TRX-20260805-0020',
+        coin_amount: 25000,
+        bonus_coin: 0,
+        linkqu_reference: '800',
+        invoice_url: 'https://cognos.linkqu.id/pay/custom-amount-test',
+      });
+    });
+
+    it('applies the published bonus tier for a qualifying amount', async () => {
+      transactionsService.createPendingCustomAmount.mockResolvedValue({
+        id: 'TRX-20260805-0025',
+      } as any);
+      linkQuService.createInvoice.mockResolvedValue({
+        invoiceId: '802',
+        invoiceUrl: 'https://cognos.linkqu.id/pay/custom-amount-bonus',
+        status: '00',
+      });
+
+      await service.checkoutCustomAmount({
+        amount: 500000,
+        target_user_id: '1',
+      });
+
+      // 500k tier -> +5,000 bonus
+      expect(
+        transactionsService.createPendingCustomAmount,
+      ).toHaveBeenCalledWith(
+        expect.objectContaining({ coinAmount: '505000', costBasis: '505000' }),
+      );
+    });
+
+    it('reads the margin rate from settings on every call, so an admin update takes effect without a redeploy', async () => {
+      settingsService.get.mockResolvedValue({
+        customAmountMarginRate: '20',
+      } as any);
+      transactionsService.createPendingCustomAmount.mockResolvedValue({
+        id: 'TRX-20260805-0030',
+      } as any);
+      linkQuService.createInvoice.mockResolvedValue({
+        invoiceId: '801',
+        invoiceUrl: 'https://cognos.linkqu.id/pay/custom-amount-test-2',
+        status: '00',
+      });
+
+      await service.checkoutCustomAmount({
+        amount: 10000,
+        target_user_id: '1',
+      });
+
+      // full value = 10000 (no bonus); 20% cut -> floor(10000*0.8) = 8000
+      expect(
+        transactionsService.createPendingCustomAmount,
+      ).toHaveBeenCalledWith(
+        expect.objectContaining({ coinAmount: '8000', costBasis: '8000' }),
+      );
+    });
+  });
+
   describe('handleInvoicePaid', () => {
+    it('uses coinAmount/costBasis directly for a custom-amount transaction with no linked product', async () => {
+      const transaction = {
+        id: 'TRX-20260805-0021',
+        paymentStatus: PaymentStatus.PENDING,
+        targetUserId: '1',
+        targetZoneId: '99',
+        referralCode: null,
+        grossAmount: '25000.00',
+        product: null,
+        coinAmount: '225',
+        costBasis: '22500',
+      };
+      transactionsService.findByExternalId.mockResolvedValue(
+        transaction as any,
+      );
+      injectCoinMock.mockResolvedValue({
+        success: true,
+        response: '{"mock":true}',
+      });
+      linkQuService.checkTransactionStatus.mockResolvedValue({
+        statusCode: 'success',
+        statusMessage: 'SUCCESS',
+        fee: '500.00',
+      });
+
+      await service.handleInvoicePaid('TRX-20260805-0021');
+
+      expect(injectCoinMock).toHaveBeenCalledWith({
+        productProviderCode: 'custom-amount',
+        targetUserId: '1',
+        targetZoneId: '99',
+        coin: 225,
+      });
+      expect(creditRevenueMock).toHaveBeenCalledWith({
+        transactionId: 'TRX-20260805-0021',
+        grossAmount: '25000.00',
+        baseCost: '22500',
+        commissionPaid: '0.00',
+        providerFee: '500.00',
+      });
+    });
+
+    it('throws BadRequestException when a transaction has neither a product nor custom-amount pricing', async () => {
+      const transaction = {
+        id: 'TRX-20260805-0022',
+        paymentStatus: PaymentStatus.PENDING,
+        targetUserId: '1',
+        targetZoneId: '99',
+        referralCode: null,
+        grossAmount: '25000.00',
+        product: null,
+        coinAmount: null,
+        costBasis: null,
+      };
+      transactionsService.findByExternalId.mockResolvedValue(
+        transaction as any,
+      );
+
+      await expect(
+        service.handleInvoicePaid('TRX-20260805-0022'),
+      ).rejects.toBeInstanceOf(BadRequestException);
+    });
+  });
+
+  describe('handleInvoicePaid (product-based)', () => {
     it('marks the transaction paid, injects coin, and credits platform revenue (no referral code, no commission credit)', async () => {
       const transaction = {
         id: 'TRX-20260805-0001',
@@ -393,11 +609,50 @@ describe('TopupService', () => {
       transactionsService.findByExternalId.mockResolvedValue(
         transaction as any,
       );
+      // The real guard is the atomic conditional UPDATE, not a prior read -
+      // markPaid itself reports "no row transitioned" when already paid.
+      transactionsService.markPaid.mockResolvedValue(false);
 
       await service.handleInvoicePaid('TRX-20260805-0001');
 
-      expect(transactionsService.markPaid).not.toHaveBeenCalled();
       expect(injectCoinMock).not.toHaveBeenCalled();
+    });
+
+    it('is race-safe: two concurrent callbacks for the same pending transaction only inject coin once', async () => {
+      const transaction = {
+        id: 'TRX-20260805-0011',
+        paymentStatus: PaymentStatus.PENDING,
+        targetUserId: '1',
+        targetZoneId: '99',
+        referralCode: null,
+        grossAmount: '20000.00',
+        product,
+      };
+      transactionsService.findByExternalId.mockResolvedValue(
+        transaction as any,
+      );
+      // Simulates the DB-level reality: only the first conditional UPDATE
+      // actually transitions PENDING -> PAID and returns true; a
+      // concurrent second call finds 0 rows matched and gets false.
+      transactionsService.markPaid
+        .mockResolvedValueOnce(true)
+        .mockResolvedValueOnce(false);
+      injectCoinMock.mockResolvedValue({
+        success: true,
+        response: '{"mock":true}',
+      });
+      linkQuService.checkTransactionStatus.mockResolvedValue({
+        statusCode: 'success',
+        statusMessage: 'SUCCESS',
+        fee: '1000.00',
+      });
+
+      await Promise.all([
+        service.handleInvoicePaid('TRX-20260805-0011'),
+        service.handleInvoicePaid('TRX-20260805-0011'),
+      ]);
+
+      expect(injectCoinMock).toHaveBeenCalledTimes(1);
     });
 
     it('throws NotFoundException when the transaction does not exist', async () => {

@@ -7,6 +7,7 @@ import { PlatformModule } from '../platform/platform.module';
 import { ProductsModule } from '../products/products.module';
 import { ProviderModule } from '../provider/provider.module';
 import { SettingsModule } from '../settings/settings.module';
+import { TopupModule } from '../topup/topup.module';
 import { TransactionsModule } from '../transactions/transactions.module';
 import { AdminController } from './admin.controller';
 
@@ -21,6 +22,7 @@ import { AdminController } from './admin.controller';
     ProviderModule,
     LinkQuModule,
     PlatformModule,
+    TopupModule,
   ],
   controllers: [AdminController],
 })

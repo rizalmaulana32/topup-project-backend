@@ -10,10 +10,14 @@ import type { ProviderTopUpPort } from '../provider/provider-top-up.port';
 import { AffiliatesService } from '../affiliates/affiliates.service';
 import { PlatformService } from '../platform/platform.service';
 import { ProductsService } from '../products/products.service';
+import { SettingsService } from '../settings/settings.service';
 import { TransactionsService } from '../transactions/transactions.service';
 import { LinkQuService } from '../linkqu/linkqu.service';
 import { CheckIdDto } from './dto/check-id.dto';
 import { CheckoutDto } from './dto/checkout.dto';
+import { CheckoutCustomAmountDto } from './dto/checkout-custom-amount.dto';
+import { EstimateCustomAmountDto } from './dto/estimate-custom-amount.dto';
+import { calculateCustomAmountPricing } from './custom-amount-pricing.util';
 import { PaymentStatus } from '../transactions/entities/transaction.entity';
 
 @Injectable()
@@ -28,6 +32,7 @@ export class TopupService {
     private readonly linkQuService: LinkQuService,
     private readonly affiliatesService: AffiliatesService,
     private readonly platformService: PlatformService,
+    private readonly settingsService: SettingsService,
   ) {}
 
   /**
@@ -138,6 +143,83 @@ export class TopupService {
   }
 
   /**
+   * Read-only calculator for the checkout form: whichever field the
+   * customer typed into - a "Rupiah" field or a "Koin" field - the typed
+   * number IS the nominal amount paid (confirmed with the client
+   * 2026-10-05: coin and rupiah are the same input, never a target final
+   * payout to solve backward for). `coin` is accepted purely as an alias
+   * for `amount` so the FE doesn't have to relabel the field it sends;
+   * both go through the exact same forward pricing function checkout-custom
+   * uses, so the preview can never drift from what actually gets charged.
+   */
+  async estimateCustomAmount(dto: EstimateCustomAmountDto) {
+    if ((dto.amount === undefined) === (dto.coin === undefined)) {
+      throw new BadRequestException(
+        'Provide exactly one of amount or coin, not both or neither',
+      );
+    }
+
+    const amount = (dto.amount ?? dto.coin) as number;
+    const settings = await this.settingsService.get();
+    const marginRate = Number(settings.customAmountMarginRate);
+    const pricing = calculateCustomAmountPricing(amount, marginRate);
+
+    return {
+      amount,
+      coin_amount: pricing.coinAmount,
+      bonus_coin: pricing.bonusCoin,
+    };
+  }
+
+  /**
+   * Adjustable-amount checkout: customer types a nominal instead of picking
+   * a fixed catalog product. See custom-amount-pricing.util.ts for the
+   * confirmed coin/margin formula.
+   */
+  async checkoutCustomAmount(dto: CheckoutCustomAmountDto) {
+    const settings = await this.settingsService.get();
+    const { coinAmount, bonusCoin, costBasis } = calculateCustomAmountPricing(
+      dto.amount,
+      Number(settings.customAmountMarginRate),
+    );
+
+    if (coinAmount <= 0) {
+      throw new BadRequestException(
+        `amount ${dto.amount} is too small to convert to any coin`,
+      );
+    }
+
+    const transaction =
+      await this.transactionsService.createPendingCustomAmount({
+        grossAmount: String(dto.amount),
+        coinAmount: String(coinAmount),
+        costBasis: String(costBasis),
+        targetUserId: dto.target_user_id,
+        targetZoneId: dto.target_zone_id,
+        referralCode: dto.affiliate_code,
+      });
+
+    const invoice = await this.linkQuService.createInvoice({
+      externalId: transaction.id,
+      amount: dto.amount,
+      description: `Top-up ${coinAmount} coin for ${dto.target_user_id}`,
+    });
+
+    await this.transactionsService.attachLinkQuReference(
+      transaction.id,
+      invoice.invoiceId,
+    );
+
+    return {
+      transaction_id: transaction.id,
+      coin_amount: coinAmount,
+      bonus_coin: bonusCoin,
+      linkqu_reference: invoice.invoiceId,
+      invoice_url: invoice.invoiceUrl,
+    };
+  }
+
+  /**
    * Called by the LinkQu payment callback controller after the callback
    * signature has already been verified.
    */
@@ -151,28 +233,40 @@ export class TopupService {
       );
     }
 
-    if (transaction.paymentStatus === PaymentStatus.PAID) {
+    const transitioned = await this.transactionsService.markPaid(
+      transaction.id,
+    );
+    if (!transitioned) {
       this.logger.warn(
         `Duplicate paid callback for ${externalId}, ignoring (idempotent).`,
       );
       return;
     }
 
-    await this.transactionsService.markPaid(transaction.id);
-
-    if (!transaction.product) {
+    let coin: number;
+    let costBasis: string;
+    let providerProductCode: string;
+    if (transaction.product) {
+      coin =
+        Number(transaction.product.coinAmount) +
+        Number(transaction.product.bonusCoin);
+      costBasis = transaction.product.basePrice;
+      providerProductCode = transaction.product.providerCode;
+    } else if (transaction.coinAmount && transaction.costBasis) {
+      coin = Number(transaction.coinAmount);
+      costBasis = transaction.costBasis;
+      providerProductCode = 'custom-amount';
+    } else {
       throw new BadRequestException(
-        `Transaction ${externalId} has no linked product; cannot inject coin`,
+        `Transaction ${externalId} has neither a linked product nor custom-amount pricing; cannot inject coin`,
       );
     }
 
     const injectResult = await this.provider.injectCoin({
-      productProviderCode: transaction.product.providerCode,
+      productProviderCode: providerProductCode,
       targetUserId: transaction.targetUserId,
       targetZoneId: transaction.targetZoneId,
-      coin:
-        Number(transaction.product.coinAmount) +
-        Number(transaction.product.bonusCoin),
+      coin,
     });
 
     await this.transactionsService.markProviderResult(transaction.id, {
@@ -209,7 +303,7 @@ export class TopupService {
       await this.platformService.creditRevenueForTransaction({
         transactionId: transaction.id,
         grossAmount: transaction.grossAmount,
-        baseCost: transaction.product.basePrice,
+        baseCost: costBasis,
         commissionPaid,
         providerFee: linkQuFee,
       });

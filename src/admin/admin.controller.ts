@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   Delete,
+  ForbiddenException,
   Get,
   Inject,
   Logger,
@@ -12,6 +13,7 @@ import {
   Req,
   UseGuards,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import {
   ApiBearerAuth,
   ApiOperation,
@@ -31,6 +33,7 @@ import { PROVIDER_TOP_UP_PORT } from '../provider/provider-top-up.port';
 import type { ProviderTopUpPort } from '../provider/provider-top-up.port';
 import { ProductsService } from '../products/products.service';
 import { SettingsService } from '../settings/settings.service';
+import { TopupService } from '../topup/topup.service';
 import { TransactionsService } from '../transactions/transactions.service';
 import { UserRole } from '../users/entities/user.entity';
 import { CreateProductDto } from './dto/create-product.dto';
@@ -63,6 +66,8 @@ export class AdminController {
     private readonly providerTopUp: ProviderTopUpPort,
     private readonly linkQuService: LinkQuService,
     private readonly platformService: PlatformService,
+    private readonly topupService: TopupService,
+    private readonly configService: ConfigService,
   ) {}
 
   @Get('affiliates')
@@ -184,6 +189,7 @@ export class AdminController {
       data: {
         global_commission_rate: settings.globalCommissionRate,
         minimum_withdrawal_amount: settings.minimumWithdrawalAmount,
+        custom_amount_margin_rate: settings.customAmountMarginRate,
         admin_bank_name: settings.adminBankName,
         admin_account_number: settings.adminAccountNumber,
         admin_account_holder: settings.adminAccountHolder,
@@ -200,6 +206,7 @@ export class AdminController {
     const settings = await this.settingsService.update({
       globalCommissionRate: dto.global_commission_rate,
       minimumWithdrawalAmount: dto.minimum_withdrawal_amount,
+      customAmountMarginRate: dto.custom_amount_margin_rate,
       adminBankName: dto.admin_bank_name,
       adminAccountNumber: dto.admin_account_number,
       adminAccountHolder: dto.admin_account_holder,
@@ -209,6 +216,7 @@ export class AdminController {
       data: {
         global_commission_rate: settings.globalCommissionRate,
         minimum_withdrawal_amount: settings.minimumWithdrawalAmount,
+        custom_amount_margin_rate: settings.customAmountMarginRate,
         admin_bank_name: settings.adminBankName,
         admin_account_number: settings.adminAccountNumber,
         admin_account_holder: settings.adminAccountHolder,
@@ -343,6 +351,23 @@ export class AdminController {
         offset: query.offset ?? 0,
       },
     };
+  }
+
+  @Post('transactions/:id/simulate-paid')
+  @ApiOperation({
+    summary:
+      'Testing-only: mark a pending transaction as paid and run the real coin-injection/commission/revenue pipeline, without a real LinkQu payment. Disabled unless ALLOW_PAYMENT_SIMULATION=true is set on the server.',
+  })
+  @ApiParam({ name: 'id', description: 'The transaction ID, e.g. TRX-20261002-6498' })
+  async simulatePaidTransaction(@Param('id') id: string) {
+    if (this.configService.get<string>('ALLOW_PAYMENT_SIMULATION') !== 'true') {
+      throw new ForbiddenException(
+        'Payment simulation is disabled on this server (set ALLOW_PAYMENT_SIMULATION=true to enable).',
+      );
+    }
+
+    await this.topupService.handleInvoicePaid(id);
+    return { success: true };
   }
 
   @Get('contact-messages')

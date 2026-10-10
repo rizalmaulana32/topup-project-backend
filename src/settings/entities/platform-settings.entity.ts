@@ -29,6 +29,24 @@ export class PlatformSettings {
   minimumWithdrawalAmount: string;
 
   /**
+   * Optional additional platform cut on adjustable-amount top-ups
+   * (topup/checkout-custom), layered on top of the published 1:1 +
+   * bonus-tier rate (see custom-amount-pricing.util.ts). Defaults to 0 so
+   * the system exactly matches the client's real published pricing poster
+   * ("YAY AGENCY - TOPUP RESMI KOIN MOMO LIVE", confirmed 2026-10-05) out
+   * of the box; adjustable without a redeploy if the business wants a cut
+   * later.
+   */
+  @Column({
+    name: 'custom_amount_margin_rate',
+    type: 'decimal',
+    precision: 5,
+    scale: 2,
+    default: 0,
+  })
+  customAmountMarginRate: string;
+
+  /**
    * The platform's own accumulated revenue (sellingPrice - basePrice -
    * commission paid, credited on every successfully-injected paid
    * transaction — see PlatformService.creditRevenueForTransaction),
