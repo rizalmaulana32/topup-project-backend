@@ -5,14 +5,21 @@ import { TransactionsService } from '../transactions/transactions.service';
 import { TopupService } from './topup.service';
 
 /**
- * Safety net for the exact incident from 2026-10-10: a customer paid via
- * LinkQu, LinkQu's own dashboard confirmed it, but our webhook never
- * arrived (lost during a server outage) - the transaction sat PENDING
- * forever with no self-healing. This sweep periodically re-checks every
- * PENDING transaction that has a LinkQu invoice directly against LinkQu's
- * own checkstatus API and completes/expires it itself if the webhook
- * never shows up, instead of relying on a human noticing and replaying it
- * manually.
+ * Safety net for a real, recurring pattern: a customer pays via LinkQu,
+ * LinkQu's own checkstatus confirms it, but the webhook never arrives -
+ * first seen during a server outage (2026-10-10), then confirmed again
+ * on a fully healthy server (2026-10-11, Shopee e-wallet payment,
+ * TRX-20261011-0684) - so webhook delivery itself is not 100% reliable
+ * even without any infrastructure problem on our side. This sweep
+ * periodically re-checks every PENDING transaction that has a LinkQu
+ * invoice directly against LinkQu's own checkstatus API and
+ * completes/expires it itself if the webhook never shows up, instead of
+ * relying on a human noticing and replaying it manually.
+ *
+ * Runs every minute (tightened from every 5 minutes 2026-10-11) so a
+ * missed webhook never costs more than ~60s instead of up to 5 minutes -
+ * cheap to run this often since it's a no-op fast return whenever there's
+ * nothing pending.
  *
  * Reuses TopupService.handleInvoicePaid/handleInvoiceExpired - the exact
  * same atomic, idempotent completion path the real webhook uses (see the
@@ -32,7 +39,7 @@ export class TransactionReconciliationService {
     private readonly topupService: TopupService,
   ) {}
 
-  @Cron(CronExpression.EVERY_5_MINUTES)
+  @Cron(CronExpression.EVERY_MINUTE)
   async reconcilePendingTransactions(): Promise<void> {
     const pending =
       await this.transactionsService.findPendingWithLinkQuReference();
