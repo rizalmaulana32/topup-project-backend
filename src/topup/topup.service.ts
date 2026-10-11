@@ -289,6 +289,10 @@ export class TopupService {
           transaction.id,
         );
         linkQuFee = status.fee ?? '0.00';
+        await this.transactionsService.setProviderFee(
+          transaction.id,
+          linkQuFee,
+        );
       } catch (error) {
         // The platform revenue credit is best-effort on the fee - a failed
         // lookup must not block a coin injection that already succeeded.

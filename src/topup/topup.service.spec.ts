@@ -33,6 +33,7 @@ describe('TopupService', () => {
       | 'markExpired'
       | 'markFailed'
       | 'markProviderResult'
+      | 'setProviderFee'
     >
   >;
   let linkQuService: jest.Mocked<
@@ -81,6 +82,7 @@ describe('TopupService', () => {
       markExpired: jest.fn(),
       markFailed: jest.fn(),
       markProviderResult: jest.fn(),
+      setProviderFee: jest.fn(),
     };
     linkQuService = {
       createInvoice: jest.fn(),
@@ -493,6 +495,10 @@ describe('TopupService', () => {
         { success: true, response: '{"mock":true}' },
       );
       expect(creditCommissionMock).not.toHaveBeenCalled();
+      expect(transactionsService.setProviderFee).toHaveBeenCalledWith(
+        'TRX-20260805-0001',
+        '1000.00',
+      );
       expect(creditRevenueMock).toHaveBeenCalledWith({
         transactionId: 'TRX-20260805-0001',
         grossAmount: '20000.00',
@@ -525,6 +531,7 @@ describe('TopupService', () => {
 
       await service.handleInvoicePaid('TRX-20260805-0010');
 
+      expect(transactionsService.setProviderFee).not.toHaveBeenCalled();
       expect(creditRevenueMock).toHaveBeenCalledWith({
         transactionId: 'TRX-20260805-0010',
         grossAmount: '20000.00',

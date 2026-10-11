@@ -114,6 +114,22 @@ export class Transaction {
   @Column({ name: 'provider_response', type: 'text', nullable: true })
   providerResponse: string | null;
 
+  /**
+   * LinkQu's real admin fee for this payment, persisted at payment time
+   * (fetched via LinkQuService.checkTransactionStatus, same call already
+   * used for platform revenue crediting) so superadmin totals that need
+   * the real amount customers paid - grossAmount + providerFee - don't
+   * need a live LinkQu call per transaction to compute.
+   */
+  @Column({
+    name: 'provider_fee',
+    type: 'decimal',
+    precision: 14,
+    scale: 2,
+    nullable: true,
+  })
+  providerFee: string | null;
+
   @Column({ name: 'paid_at', type: 'timestamptz', nullable: true })
   paidAt: Date | null;
 

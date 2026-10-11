@@ -41,4 +41,23 @@ export class UsersService {
   async updateStatus(id: string, status: UserStatus): Promise<void> {
     await this.userRepository.update(id, { status });
   }
+
+  /**
+   * Frees up a deactivated user's email for reuse by a brand new
+   * registration, without losing any historical data on this row
+   * (commission_logs/transactions reference user_id, not email). Called
+   * when an affiliate is soft-deleted - without this, the unique email
+   * constraint permanently blocks that person (or anyone) from ever
+   * registering with that email again, which surfaced as a real
+   * "Email already registered" 409 (2026-10-10).
+   */
+  async archiveEmailForReuse(id: string): Promise<void> {
+    const user = await this.findByIdOrFail(id);
+    if (!user) {
+      return;
+    }
+    await this.userRepository.update(id, {
+      email: `deleted-${Date.now()}-${user.email}`,
+    });
+  }
 }

@@ -22,6 +22,8 @@ describe('AffiliatesService', () => {
   let withdrawalFindOneMock: jest.Mock;
   let createUserMock: jest.Mock;
   let updateStatusMock: jest.Mock;
+  let archiveEmailForReuseMock: jest.Mock;
+  let profileSoftDeleteMock: jest.Mock;
   let findByReferralCodeMock: jest.Mock;
   let settingsGetMock: jest.Mock;
   let service: AffiliatesService;
@@ -40,6 +42,8 @@ describe('AffiliatesService', () => {
     withdrawalFindOneMock = jest.fn();
     createUserMock = jest.fn();
     updateStatusMock = jest.fn();
+    archiveEmailForReuseMock = jest.fn();
+    profileSoftDeleteMock = jest.fn();
     findByReferralCodeMock = jest.fn();
     settingsGetMock = jest.fn().mockResolvedValue(defaultSettings);
 
@@ -47,6 +51,7 @@ describe('AffiliatesService', () => {
       create: profileCreateMock,
       save: profileSaveMock,
       findOne: profileFindOneMock,
+      softDelete: profileSoftDeleteMock,
     } as unknown as Repository<AffiliatorProfile>;
     const commissionLogRepository = {
       find: commissionLogFindMock,
@@ -58,6 +63,7 @@ describe('AffiliatesService', () => {
     const usersService = {
       createUser: createUserMock,
       updateStatus: updateStatusMock,
+      archiveEmailForReuse: archiveEmailForReuseMock,
     } as unknown as UsersService;
     const transactionsService = {
       findByReferralCode: findByReferralCodeMock,
@@ -233,6 +239,22 @@ describe('AffiliatesService', () => {
       await service.reject('1');
 
       expect(updateStatusMock).toHaveBeenCalledWith('1', UserStatus.INACTIVE);
+    });
+  });
+
+  describe('softDelete', () => {
+    it('deactivates the user, archives their email for reuse, and soft-deletes the profile', async () => {
+      profileFindOneMock.mockResolvedValue({
+        id: '1',
+        userId: '42',
+        user: { id: '42', email: 'affiliate@example.com' },
+      });
+
+      await service.softDelete('1');
+
+      expect(updateStatusMock).toHaveBeenCalledWith('42', UserStatus.INACTIVE);
+      expect(archiveEmailForReuseMock).toHaveBeenCalledWith('42');
+      expect(profileSoftDeleteMock).toHaveBeenCalledWith('1');
     });
   });
 

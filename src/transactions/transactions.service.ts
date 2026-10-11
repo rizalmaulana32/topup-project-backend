@@ -167,4 +167,40 @@ export class TransactionsService {
       completedAt: new Date(),
     });
   }
+
+  async setProviderFee(transactionId: string, providerFee: string): Promise<void> {
+    await this.transactionRepository.update(transactionId, { providerFee });
+  }
+
+  /**
+   * Superadmin dashboard totals (2026-10-10 client request): two numbers,
+   * frontend picks which to show.
+   *  - grossTotal: sum of the product/nominal price only (what the
+   *    platform's own catalog charges), e.g. two Rp 10,000 purchases -> 20,000
+   *  - totalWithFee: sum including LinkQu's real admin fee - what customers
+   *    actually paid out of pocket, e.g. two Rp 14,000 charges -> 28,000
+   * Both are read directly off stored columns (grossAmount, providerFee),
+   * no live LinkQu calls needed since providerFee is persisted at payment
+   * time (see setProviderFee / TopupService.handleInvoicePaid).
+   */
+  async getPaidTotals(): Promise<{
+    grossTotal: string;
+    totalWithFee: string;
+  }> {
+    const result: { gross_total: string | null; total_with_fee: string | null } =
+      await this.transactionRepository
+        .createQueryBuilder('t')
+        .select('COALESCE(SUM(t.gross_amount), 0)', 'gross_total')
+        .addSelect(
+          'COALESCE(SUM(t.gross_amount + COALESCE(t.provider_fee, 0)), 0)',
+          'total_with_fee',
+        )
+        .where('t.payment_status = :status', { status: PaymentStatus.PAID })
+        .getRawOne();
+
+    return {
+      grossTotal: result?.gross_total ?? '0',
+      totalWithFee: result?.total_with_fee ?? '0',
+    };
+  }
 }

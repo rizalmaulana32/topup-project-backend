@@ -335,6 +335,22 @@ export class AdminController {
     };
   }
 
+  @Get('transactions/totals')
+  @ApiOperation({
+    summary:
+      'Two customer-paid totals for the superadmin dashboard (sum across all paid transactions) - frontend picks which to display. gross_total is the product/nominal price only; total_with_fee includes LinkQu\'s real admin fee, i.e. what customers actually paid out of pocket.',
+  })
+  async getTransactionTotals() {
+    const data = await this.transactionsService.getPaidTotals();
+    return {
+      success: true,
+      data: {
+        gross_total: data.grossTotal,
+        total_with_fee: data.totalWithFee,
+      },
+    };
+  }
+
   @Get('transactions')
   @ApiOperation({ summary: 'Monitor transactions' })
   async listTransactions(@Query() query: ListTransactionsDto) {

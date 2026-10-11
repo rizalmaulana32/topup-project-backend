@@ -9,6 +9,11 @@ import { AppModule } from '../src/app.module';
 import { AffiliatorProfile } from '../src/affiliates/entities/affiliator-profile.entity';
 import { LinkQuService } from '../src/linkqu/linkqu.service';
 import { Product } from '../src/products/entities/product.entity';
+import {
+  PaymentStatus,
+  ProviderStatus,
+  Transaction,
+} from '../src/transactions/entities/transaction.entity';
 import { User, UserRole, UserStatus } from '../src/users/entities/user.entity';
 
 /**
@@ -37,6 +42,7 @@ describe('Admin (e2e)', () => {
   let userRepository: Repository<User>;
   let profileRepository: Repository<AffiliatorProfile>;
   let productRepository: Repository<Product>;
+  let transactionRepository: Repository<Transaction>;
 
   let superadminToken: string;
   let pendingAffiliateProfileId: string;
@@ -94,6 +100,9 @@ describe('Admin (e2e)', () => {
       getRepositoryToken(AffiliatorProfile),
     );
     productRepository = moduleFixture.get(getRepositoryToken(Product));
+    transactionRepository = moduleFixture.get(
+      getRepositoryToken(Transaction),
+    );
 
     await userRepository.query(
       'TRUNCATE TABLE commission_withdrawals, commission_logs, transactions, affiliator_profiles, platform_withdrawals, platform_revenue_logs, platform_settings, users, products RESTART IDENTITY CASCADE',
@@ -301,17 +310,44 @@ describe('Admin (e2e)', () => {
     expect(body.data.commission_rate).toBe('20.00');
   });
 
-  it('soft-deletes an affiliate: hidden from listings, underlying user deactivated', async () => {
+  it('soft-deletes an affiliate: hidden from listings, underlying user deactivated, email freed for reuse', async () => {
+    const profileBeforeDelete = await profileRepository.findOneOrFail({
+      where: { id: secondPendingAffiliateProfileId },
+    });
+
     const deleteResponse = await request(app.getHttpServer())
       .delete(`/api/v1/admin/affiliates/${secondPendingAffiliateProfileId}`)
       .set('Authorization', `Bearer ${superadminToken}`)
       .expect(200);
     expect((deleteResponse.body as { success: boolean }).success).toBe(true);
 
-    const user = await userRepository.findOneOrFail({
+    // The original email must no longer resolve to a user at all - it's
+    // archived (renamed), freeing it for a brand new registration (see
+    // UsersService.archiveEmailForReuse, fixed 2026-10-10 after a real
+    // "Email already registered" 409 on re-registration post-delete).
+    const stillByOldEmail = await userRepository.findOne({
       where: { email: 'pending2.e2e@example.com' },
     });
+    expect(stillByOldEmail).toBeNull();
+
+    const user = await userRepository.findOneOrFail({
+      where: { id: profileBeforeDelete.userId },
+    });
     expect(user.status).toBe(UserStatus.INACTIVE);
+    expect(user.email).toMatch(/^deleted-\d+-pending2\.e2e@example\.com$/);
+
+    // Re-registering with the original email must now succeed.
+    await request(app.getHttpServer())
+      .post('/api/v1/affiliate/register')
+      .send({
+        name: 'Reregistered Affiliate',
+        email: 'pending2.e2e@example.com',
+        password: 'super-secret-password',
+        bank_name: 'BCA',
+        account_number: '1234567890',
+        account_holder: 'Reregistered Affiliate',
+      })
+      .expect(201);
 
     const listResponse = await request(app.getHttpServer())
       .get('/api/v1/admin/affiliates')
@@ -434,6 +470,58 @@ describe('Admin (e2e)', () => {
     };
     expect(Array.isArray(body.data.items)).toBe(true);
     expect(body.data.limit).toBe(5);
+  });
+
+  it('totals paid transactions - gross-only and including the real LinkQu fee (2026-10-10 client request)', async () => {
+    await transactionRepository.save([
+      transactionRepository.create({
+        id: 'TRX-TOTALS-TEST-1',
+        targetUserId: '5700893',
+        grossAmount: '10000.00',
+        providerFee: '4000.00',
+        paymentStatus: PaymentStatus.PAID,
+        providerStatus: ProviderStatus.SUCCESS,
+      }),
+      transactionRepository.create({
+        id: 'TRX-TOTALS-TEST-2',
+        targetUserId: '12345678',
+        grossAmount: '10000.00',
+        providerFee: '4000.00',
+        paymentStatus: PaymentStatus.PAID,
+        providerStatus: ProviderStatus.SUCCESS,
+      }),
+      // A pending transaction must not be counted in either total.
+      transactionRepository.create({
+        id: 'TRX-TOTALS-TEST-3',
+        targetUserId: '99999999',
+        grossAmount: '500000.00',
+        paymentStatus: PaymentStatus.PENDING,
+        providerStatus: ProviderStatus.PENDING,
+      }),
+    ]);
+
+    const response = await request(app.getHttpServer())
+      .get('/api/v1/admin/transactions/totals')
+      .set('Authorization', `Bearer ${superadminToken}`)
+      .expect(200);
+
+    const body = response.body as {
+      data: { gross_total: string; total_with_fee: string };
+    };
+    expect(body.data.gross_total).toBe('20000.00');
+    expect(body.data.total_with_fee).toBe('28000.00');
+
+    await transactionRepository.delete([
+      'TRX-TOTALS-TEST-1',
+      'TRX-TOTALS-TEST-2',
+      'TRX-TOTALS-TEST-3',
+    ]);
+  });
+
+  it('rejects transaction totals without a token', async () => {
+    await request(app.getHttpServer())
+      .get('/api/v1/admin/transactions/totals')
+      .expect(401);
   });
 
   it('lists withdrawals for monitoring (empty in this suite)', async () => {

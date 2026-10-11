@@ -175,10 +175,17 @@ export class AffiliatesService {
    * no reason. The referral code is intentionally left in place (not
    * cleared) so historical transactions/commission_logs referencing it
    * remain traceable.
+   *
+   * The user's email is archived (not cleared) so it's immediately free
+   * for a brand new registration - without this, the deleted affiliate's
+   * own old account permanently blocks that email from ever registering
+   * again via the unique constraint (confirmed as a real "Email already
+   * registered" 409 2026-10-10).
    */
   async softDelete(profileId: string): Promise<void> {
     const profile = await this.findProfileByIdOrFail(profileId);
     await this.usersService.updateStatus(profile.userId, UserStatus.INACTIVE);
+    await this.usersService.archiveEmailForReuse(profile.userId);
     await this.profileRepository.softDelete(profileId);
   }
 
