@@ -187,8 +187,9 @@ export class TransactionsService {
     grossTotal: string;
     totalWithFee: string;
   }> {
-    const result: { gross_total: string | null; total_with_fee: string | null } =
-      await this.transactionRepository
+    const result:
+      | { gross_total: string | null; total_with_fee: string | null }
+      | undefined = await this.transactionRepository
         .createQueryBuilder('t')
         .select('COALESCE(SUM(t.gross_amount), 0)', 'gross_total')
         .addSelect(
