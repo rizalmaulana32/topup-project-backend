@@ -531,5 +531,67 @@ describe('Commission crediting and withdrawal (e2e)', () => {
       where: { id: transactionId },
     });
     expect(paidTransaction.affiliateCommission).toBe('160000.00');
+
+    await request(app.getHttpServer())
+      .patch('/api/v1/admin/settings')
+      .set('Authorization', `Bearer ${superadminToken}`)
+      .send({ customer_discount_rate: 0 })
+      .expect(200);
+  });
+
+  it('applies the 1%/5% volume tier once opted in, not retroactive to earlier transactions this month', async () => {
+    await request(app.getHttpServer())
+      .patch(`/api/v1/admin/affiliates/${affiliateProfileId}/tiered-commission`)
+      .set('Authorization', `Bearer ${superadminToken}`)
+      .send({ enabled: true })
+      .expect(200);
+
+    // sellingPrice 2000000 per order; 4 orders (8,000,000) stay under the
+    // 10,000,000 threshold -> 1% each. The 5th order (10,000,000 running
+    // total) crosses it -> 5% on that one, per the non-retroactive rule.
+    const commissions: string[] = [];
+    for (let i = 0; i < 5; i++) {
+      const checkoutResponse = await request(app.getHttpServer())
+        .post('/api/v1/topup/checkout')
+        .send({
+          product_id: product.id,
+          target_user_id: `tier-test-${i}`,
+          affiliate_code: affiliateCode,
+        })
+        .expect(201);
+      const transactionId = (
+        checkoutResponse.body as { data: { transaction_id: string } }
+      ).data.transaction_id;
+
+      await request(app.getHttpServer())
+        .post('/api/v1/webhooks/linkqu/payment')
+        .send({
+          partner_reff: transactionId,
+          amount: 2000000,
+          va_number: '7136490000031689',
+          username: 'LI307GXIN',
+          status: 'SUCCESS',
+          signature: TEST_SIGNATURE,
+        })
+        .expect(200);
+
+      const paid = await transactionRepository.findOneOrFail({
+        where: { id: transactionId },
+      });
+      commissions.push(paid.affiliateCommission as string);
+    }
+
+    expect(commissions).toEqual([
+      '20000.00', // 1% of 2,000,000
+      '20000.00',
+      '20000.00',
+      '20000.00',
+      '100000.00', // 5% of 2,000,000 - this order pushed the running total to 10,000,000
+    ]);
+
+    const profile = await profileRepository.findOneOrFail({
+      where: { id: affiliateProfileId },
+    });
+    expect(profile.currentPeriodVolume).toBe('10000000.00');
   });
 });

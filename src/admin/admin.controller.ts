@@ -45,6 +45,7 @@ import { ListWithdrawalsDto } from './dto/list-withdrawals.dto';
 import { PlatformWithdrawDto } from '../platform/dto/platform-withdraw.dto';
 import { ProcessWithdrawalDto } from './dto/process-withdrawal.dto';
 import { ProviderCoinTransferDto } from './dto/provider-coin-transfer.dto';
+import { SetTieredCommissionDto } from './dto/set-tiered-commission.dto';
 import { UpdateCommissionRateDto } from './dto/update-commission-rate.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
 import { UpdateSettingsDto } from './dto/update-settings.dto';
@@ -175,6 +176,35 @@ export class AdminController {
       data: {
         profile_id: profile.id,
         commission_rate: profile.commissionRate,
+      },
+    };
+  }
+
+  @Patch('affiliates/:id/tiered-commission')
+  @ApiOperation({
+    summary:
+      'Switch an affiliate between flat commission_rate and the opt-in 1% below Rp 10jt / 5% above Rp 10jt monthly-volume tiers',
+  })
+  @ApiParam({
+    name: 'id',
+    description:
+      'The affiliate PROFILE ID (not user_id) - see profile_id in the GET /admin/affiliates response.',
+  })
+  async setAffiliateTieredCommission(
+    @Param('id') id: string,
+    @Body() dto: SetTieredCommissionDto,
+  ) {
+    const profile = await this.affiliatesService.setTieredCommissionEnabled(
+      id,
+      dto.enabled,
+    );
+    return {
+      success: true,
+      data: {
+        profile_id: profile.id,
+        tiered_commission_enabled: profile.tieredCommissionEnabled,
+        current_period_month: profile.currentPeriodMonth,
+        current_period_volume: profile.currentPeriodVolume,
       },
     };
   }

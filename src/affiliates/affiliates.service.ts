@@ -19,6 +19,10 @@ import { TransactionsService } from '../transactions/transactions.service';
 import { User, UserRole, UserStatus } from '../users/entities/user.entity';
 import { UsersService } from '../users/users.service';
 import { RegisterAffiliateDto } from './dto/register-affiliate.dto';
+import {
+  calculateTieredCommissionRate,
+  currentPeriodKey,
+} from './tiered-commission.util';
 import { AffiliatorProfile } from './entities/affiliator-profile.entity';
 import {
   CommissionLog,
@@ -220,6 +224,23 @@ export class AffiliatesService {
   }
 
   /**
+   * Toggles the opt-in tiered-commission mode (see tiered-commission.util.ts)
+   * for one affiliate. While enabled, commissionRate above is ignored by
+   * creditCommissionForTransaction in favor of the 1%/5% volume tiers.
+   * Disabling does not clear currentPeriodVolume/Month - re-enabling later
+   * in the same calendar month picks the running total back up rather than
+   * silently resetting it.
+   */
+  async setTieredCommissionEnabled(
+    profileId: string,
+    enabled: boolean,
+  ): Promise<AffiliatorProfile> {
+    const profile = await this.findProfileByIdOrFail(profileId);
+    profile.tieredCommissionEnabled = enabled;
+    return this.profileRepository.save(profile);
+  }
+
+  /**
    * Lets an affiliate add/update their own bank payout details after
    * registration - previously there was no way to do this at all once
    * registered (client-reported gap). Only affects the profile itself;
@@ -321,10 +342,27 @@ export class AffiliatesService {
       // (possibly since-changed) live settings rate here.
       const discountAmount = Number(params.customerDiscountAmount ?? 0);
       const originalAmount = Number(params.grossAmount) + discountAmount;
+
+      let effectiveRate = Number(profile.commissionRate);
+      let periodUpdate: { currentPeriodVolume: string; currentPeriodMonth: string } | null =
+        null;
+      if (profile.tieredCommissionEnabled) {
+        const periodKey = currentPeriodKey();
+        const periodVolumeBefore =
+          profile.currentPeriodMonth === periodKey
+            ? Number(profile.currentPeriodVolume)
+            : 0;
+        const periodVolumeAfter = periodVolumeBefore + originalAmount;
+        effectiveRate = calculateTieredCommissionRate(periodVolumeAfter);
+        periodUpdate = {
+          currentPeriodVolume: periodVolumeAfter.toFixed(2),
+          currentPeriodMonth: periodKey,
+        };
+      }
+
       const commissionAmount = Math.max(
         0,
-        (originalAmount * Number(profile.commissionRate)) / 100 -
-          discountAmount,
+        (originalAmount * effectiveRate) / 100 - discountAmount,
       );
       const newBalance = Number(profile.commissionBalance) + commissionAmount;
       const newTotalEarned =
@@ -333,6 +371,7 @@ export class AffiliatesService {
       await queryRunner.manager.update(AffiliatorProfile, profile.id, {
         commissionBalance: newBalance.toFixed(2),
         totalCommissionEarned: newTotalEarned.toFixed(2),
+        ...periodUpdate,
       });
 
       const log = queryRunner.manager.create(CommissionLog, {

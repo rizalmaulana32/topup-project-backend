@@ -72,6 +72,38 @@ export class AffiliatorProfile {
   })
   totalCommissionEarned: string;
 
+  /**
+   * Opt-in alternative to the flat commissionRate above (Ricky/client
+   * request 2026-10-31): below TIERED_COMMISSION_THRESHOLD of referred
+   * volume in a calendar month, the affiliate earns TIERED_COMMISSION_LOW_RATE;
+   * once the month's cumulative volume crosses the threshold, that
+   * transaction and the rest of the month earn TIERED_COMMISSION_HIGH_RATE
+   * (not retroactive to earlier transactions that month - see
+   * calculateTieredCommissionRate). currentPeriodVolume/Month track the
+   * running total and reset automatically when the calendar month rolls
+   * over - see AffiliatesService.creditCommissionForTransaction.
+   */
+  @Column({ name: 'tiered_commission_enabled', default: false })
+  tieredCommissionEnabled: boolean;
+
+  @Column({
+    name: 'current_period_volume',
+    type: 'decimal',
+    precision: 14,
+    scale: 2,
+    default: 0,
+  })
+  currentPeriodVolume: string;
+
+  /** 'YYYY-MM' of the period currentPeriodVolume belongs to; null until first used. */
+  @Column({
+    name: 'current_period_month',
+    type: 'varchar',
+    length: 7,
+    nullable: true,
+  })
+  currentPeriodMonth: string | null;
+
   @Column({ name: 'approved_by', type: 'bigint', nullable: true })
   approvedBy: string | null;
 

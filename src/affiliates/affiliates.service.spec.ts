@@ -310,6 +310,31 @@ describe('AffiliatesService', () => {
     });
   });
 
+  describe('setTieredCommissionEnabled', () => {
+    it('enables tiered mode on the profile', async () => {
+      profileFindOneMock.mockResolvedValue({
+        id: '1',
+        tieredCommissionEnabled: false,
+      });
+      profileSaveMock.mockImplementation((entity) => Promise.resolve(entity));
+
+      const result = await service.setTieredCommissionEnabled('1', true);
+
+      expect(result.tieredCommissionEnabled).toBe(true);
+      expect(profileSaveMock).toHaveBeenCalledWith(
+        expect.objectContaining({ tieredCommissionEnabled: true }),
+      );
+    });
+
+    it('throws NotFoundException for an unknown profile', async () => {
+      profileFindOneMock.mockResolvedValue(null);
+
+      await expect(
+        service.setTieredCommissionEnabled('999', true),
+      ).rejects.toBeInstanceOf(NotFoundException);
+    });
+  });
+
   describe('findWithdrawalByIdOrFail', () => {
     it('throws NotFoundException when no withdrawal matches', async () => {
       withdrawalFindOneMock.mockResolvedValue(null);
