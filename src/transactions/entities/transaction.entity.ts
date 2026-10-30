@@ -78,6 +78,24 @@ export class Transaction {
   @Column({ name: 'gross_amount', type: 'decimal', precision: 14, scale: 2 })
   grossAmount: string;
 
+  /**
+   * Rupiah discount actually given to the customer at checkout for using a
+   * referral code (grossAmount is what was actually charged/invoiced -
+   * this plus grossAmount recovers the pre-discount price). Snapshotted
+   * here rather than re-derived from the live settings rate at payment
+   * time, same reasoning as AffiliatorProfile.commissionRate being a
+   * snapshot: the rate used must match what the customer actually saw at
+   * checkout, not whatever the superadmin may have changed it to since.
+   */
+  @Column({
+    name: 'customer_discount_amount',
+    type: 'decimal',
+    precision: 14,
+    scale: 2,
+    default: 0,
+  })
+  customerDiscountAmount: string;
+
   @Column({
     name: 'affiliate_commission',
     type: 'decimal',

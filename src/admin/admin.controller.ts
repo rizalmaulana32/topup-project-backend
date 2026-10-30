@@ -43,6 +43,7 @@ import { ListPlatformWithdrawalsDto } from '../platform/dto/list-platform-withdr
 import { ListTransactionsDto } from './dto/list-transactions.dto';
 import { ListWithdrawalsDto } from './dto/list-withdrawals.dto';
 import { PlatformWithdrawDto } from '../platform/dto/platform-withdraw.dto';
+import { ProcessWithdrawalDto } from './dto/process-withdrawal.dto';
 import { ProviderCoinTransferDto } from './dto/provider-coin-transfer.dto';
 import { UpdateCommissionRateDto } from './dto/update-commission-rate.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
@@ -190,6 +191,7 @@ export class AdminController {
         global_commission_rate: settings.globalCommissionRate,
         minimum_withdrawal_amount: settings.minimumWithdrawalAmount,
         custom_amount_margin_rate: settings.customAmountMarginRate,
+        customer_discount_rate: settings.customerDiscountRate,
         admin_bank_name: settings.adminBankName,
         admin_account_number: settings.adminAccountNumber,
         admin_account_holder: settings.adminAccountHolder,
@@ -207,6 +209,7 @@ export class AdminController {
       globalCommissionRate: dto.global_commission_rate,
       minimumWithdrawalAmount: dto.minimum_withdrawal_amount,
       customAmountMarginRate: dto.custom_amount_margin_rate,
+      customerDiscountRate: dto.customer_discount_rate,
       adminBankName: dto.admin_bank_name,
       adminAccountNumber: dto.admin_account_number,
       adminAccountHolder: dto.admin_account_holder,
@@ -217,6 +220,7 @@ export class AdminController {
         global_commission_rate: settings.globalCommissionRate,
         minimum_withdrawal_amount: settings.minimumWithdrawalAmount,
         custom_amount_margin_rate: settings.customAmountMarginRate,
+        customer_discount_rate: settings.customerDiscountRate,
         admin_bank_name: settings.adminBankName,
         admin_account_number: settings.adminAccountNumber,
         admin_account_holder: settings.adminAccountHolder,
@@ -293,7 +297,8 @@ export class AdminController {
 
   @Post('withdrawals/:id/approve')
   @ApiOperation({
-    summary: 'Approve a withdrawal — triggers a real LinkQu disbursement',
+    summary:
+      'Approve a withdrawal request — the actual transfer is done manually outside the system; use /process afterward to mark it paid',
   })
   async approveWithdrawal(
     @Param('id') id: string,
@@ -308,7 +313,35 @@ export class AdminController {
       data: {
         withdrawal_id: withdrawal.id,
         status: withdrawal.status,
-        linkqu_disbursement_id: withdrawal.linkQuDisbursementId,
+        approved_by: withdrawal.approvedBy,
+        approved_at: withdrawal.approvedAt,
+      },
+    };
+  }
+
+  @Post('withdrawals/:id/process')
+  @ApiOperation({
+    summary:
+      'Mark an approved withdrawal as paid after the admin has manually transferred the funds',
+  })
+  async processWithdrawal(
+    @Param('id') id: string,
+    @Body() dto: ProcessWithdrawalDto,
+    @Req() request: Request & { user: AuthenticatedUser },
+  ) {
+    const withdrawal = await this.affiliatesService.markWithdrawalProcessed(
+      id,
+      request.user.id,
+      dto.notes,
+    );
+    return {
+      success: true,
+      data: {
+        withdrawal_id: withdrawal.id,
+        status: withdrawal.status,
+        processed_by: withdrawal.processedBy,
+        processed_at: withdrawal.processedAt,
+        admin_notes: withdrawal.adminNotes,
       },
     };
   }

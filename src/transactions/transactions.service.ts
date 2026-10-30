@@ -14,6 +14,9 @@ interface CreatePendingTransactionParams {
   targetUserId: string;
   targetZoneId?: string | null;
   referralCode?: string | null;
+  /** Actual amount charged/invoiced, if different from product.sellingPrice (see customerDiscountAmount). */
+  grossAmount?: string;
+  customerDiscountAmount?: string;
 }
 
 interface CreatePendingCustomAmountTransactionParams {
@@ -41,7 +44,8 @@ export class TransactionsService {
       targetUserId: params.targetUserId,
       targetZoneId: params.targetZoneId ?? null,
       referralCode: params.referralCode ?? null,
-      grossAmount: params.product.sellingPrice,
+      grossAmount: params.grossAmount ?? params.product.sellingPrice,
+      customerDiscountAmount: params.customerDiscountAmount ?? '0.00',
       paymentStatus: PaymentStatus.PENDING,
       providerStatus: ProviderStatus.PENDING,
     });

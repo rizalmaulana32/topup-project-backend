@@ -117,16 +117,41 @@ export class TopupService {
       dto.product_id,
     );
 
+    // A referral code splits part of the affiliate's commission rate back
+    // to the customer as an upfront price cut (client request 2026-10-31:
+    // the affiliate was keeping the full commission with nothing passed
+    // on to the referred customer). Only a code that would actually earn
+    // commission (checkCodeValidity) triggers the discount - same
+    // criteria creditCommissionForTransaction uses, so a fake/inactive
+    // code never discounts the price for nothing.
+    let chargedAmount = product.sellingPrice;
+    let customerDiscountAmount = '0.00';
+    if (dto.affiliate_code) {
+      const codeCheck = await this.affiliatesService.checkCodeValidity(
+        dto.affiliate_code,
+      );
+      if (codeCheck.valid) {
+        const settings = await this.settingsService.get();
+        const discountRate = Number(settings.customerDiscountRate);
+        const discount =
+          Math.round(Number(product.sellingPrice) * discountRate) / 100;
+        customerDiscountAmount = discount.toFixed(2);
+        chargedAmount = (Number(product.sellingPrice) - discount).toFixed(2);
+      }
+    }
+
     const transaction = await this.transactionsService.createPending({
       product,
       targetUserId: dto.target_user_id,
       targetZoneId: dto.target_zone_id,
       referralCode: dto.affiliate_code,
+      grossAmount: chargedAmount,
+      customerDiscountAmount,
     });
 
     const invoice = await this.linkQuService.createInvoice({
       externalId: transaction.id,
-      amount: Number(product.sellingPrice),
+      amount: Number(chargedAmount),
       description: `Top-up ${product.name} for ${dto.target_user_id}`,
     });
 
@@ -280,6 +305,7 @@ export class TopupService {
             referralCode: transaction.referralCode,
             transactionId: transaction.id,
             grossAmount: transaction.grossAmount,
+            customerDiscountAmount: transaction.customerDiscountAmount,
           })
         : '0.00';
 

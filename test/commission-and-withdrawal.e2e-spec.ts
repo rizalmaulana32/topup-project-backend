@@ -33,36 +33,12 @@ import { LinkQuService } from '../src/linkqu/linkqu.service';
  */
 const TEST_SIGNATURE = 'e2e-test-signature';
 
-// LinkQu's real withdraw/payment can return PAID or PENDING; the fake
-// forces a FAILED result for a specific test without a separate webhook
-// call, mirroring the old Duitku fake's forced-failure mechanism.
-const failingPayoutReferenceIds = new Set<string>();
-
 class FakeLinkQuService {
   createInvoice(params: { externalId: string }) {
     return Promise.resolve({
       invoiceId: `fake-reference-${params.externalId}`,
       invoiceUrl: `https://cognos.linkqu.id/pay/fake-reference-${params.externalId}`,
       status: '00',
-    });
-  }
-
-  createPayout(params: { referenceId: string }) {
-    if (failingPayoutReferenceIds.has(params.referenceId)) {
-      return Promise.resolve({
-        success: false,
-        payoutId: null,
-        responseCode: '01',
-        responseDesc: 'Insufficient funds',
-        status: 'FAILED' as const,
-      });
-    }
-    return Promise.resolve({
-      success: true,
-      payoutId: `fake-payout-${params.referenceId}`,
-      responseCode: '00',
-      responseDesc: 'Success',
-      status: 'PAID' as const,
     });
   }
 
@@ -298,7 +274,7 @@ describe('Commission crediting and withdrawal (e2e)', () => {
       .expect(400);
   });
 
-  it('completes a withdrawal immediately on admin approval when LinkQu returns PAID synchronously', async () => {
+  it('approving a withdrawal only records sign-off — no LinkQu disbursement, stays APPROVED', async () => {
     const pending = await withdrawalRepository.findOneOrFail({
       where: {
         affiliatorId: affiliateProfileId,
@@ -311,20 +287,87 @@ describe('Commission crediting and withdrawal (e2e)', () => {
       .set('Authorization', `Bearer ${superadminToken}`)
       .expect(201);
     const approveBody = approveResponse.body as {
-      data: { status: string; linkqu_disbursement_id: string };
+      data: { status: string; approved_by: string; approved_at: string };
     };
-    expect(approveBody.data.status).toBe(WithdrawalStatus.PAID);
-    expect(approveBody.data.linkqu_disbursement_id).toBe(
-      `fake-payout-${pending.id}`,
+    expect(approveBody.data.status).toBe(WithdrawalStatus.APPROVED);
+    expect(approveBody.data.approved_by).toBeTruthy();
+    expect(approveBody.data.approved_at).toBeTruthy();
+
+    const approved = await withdrawalRepository.findOneOrFail({
+      where: { id: pending.id },
+    });
+    expect(approved.status).toBe(WithdrawalStatus.APPROVED);
+    expect(approved.linkQuDisbursementId).toBeNull();
+
+    // Balance stays at 100000 — the debit was already recorded at request
+    // time; approval alone does not touch the balance further.
+    const profile = await profileRepository.findOneOrFail({
+      where: { id: affiliateProfileId },
+    });
+    expect(profile.commissionBalance).toBe('100000.00');
+  });
+
+  it('rejects marking a withdrawal processed before it is approved', async () => {
+    const pendingOther = await request(app.getHttpServer())
+      .post('/api/v1/affiliate/withdraw')
+      .set('Authorization', `Bearer ${affiliateToken}`)
+      .send({ amount: 10000 })
+      .expect(201);
+    const pendingOtherBody = pendingOther.body as {
+      data: { withdrawal_id: string };
+    };
+
+    await request(app.getHttpServer())
+      .post(
+        `/api/v1/admin/withdrawals/${pendingOtherBody.data.withdrawal_id}/process`,
+      )
+      .set('Authorization', `Bearer ${superadminToken}`)
+      .send({ notes: 'too early' })
+      .expect(409);
+
+    // Reject it to refund the lock — keeps this probe isolated from the
+    // balance trail the rest of this suite depends on.
+    await request(app.getHttpServer())
+      .post(
+        `/api/v1/admin/withdrawals/${pendingOtherBody.data.withdrawal_id}/reject`,
+      )
+      .set('Authorization', `Bearer ${superadminToken}`)
+      .expect(201);
+  });
+
+  it('marks an approved withdrawal as paid once the admin confirms the manual transfer', async () => {
+    const approved = await withdrawalRepository.findOneOrFail({
+      where: {
+        affiliatorId: affiliateProfileId,
+        status: WithdrawalStatus.APPROVED,
+      },
+    });
+
+    const processResponse = await request(app.getHttpServer())
+      .post(`/api/v1/admin/withdrawals/${approved.id}/process`)
+      .set('Authorization', `Bearer ${superadminToken}`)
+      .send({ notes: 'Transferred manually via BCA, ref 123456' })
+      .expect(201);
+    const processBody = processResponse.body as {
+      data: {
+        status: string;
+        processed_by: string;
+        processed_at: string;
+        admin_notes: string;
+      };
+    };
+    expect(processBody.data.status).toBe(WithdrawalStatus.PAID);
+    expect(processBody.data.processed_by).toBeTruthy();
+    expect(processBody.data.processed_at).toBeTruthy();
+    expect(processBody.data.admin_notes).toBe(
+      'Transferred manually via BCA, ref 123456',
     );
 
     const paid = await withdrawalRepository.findOneOrFail({
-      where: { id: pending.id },
+      where: { id: approved.id },
     });
     expect(paid.status).toBe(WithdrawalStatus.PAID);
 
-    // Balance stays at 100000 — the debit was already recorded at request
-    // time; a successful disbursement does not touch the balance further.
     const profile = await profileRepository.findOneOrFail({
       where: { id: affiliateProfileId },
     });
@@ -365,51 +408,6 @@ describe('Commission crediting and withdrawal (e2e)', () => {
     expect(
       body.data.items.every((w) => w.status === WithdrawalStatus.PAID),
     ).toBe(true);
-  });
-
-  it('refunds the balance when a withdrawal payout fails', async () => {
-    const requestResponse = await request(app.getHttpServer())
-      .post('/api/v1/affiliate/withdraw')
-      .set('Authorization', `Bearer ${affiliateToken}`)
-      .send({ amount: 50000 })
-      .expect(201);
-    const requestBody = requestResponse.body as {
-      data: { withdrawal_id: string };
-    };
-    const withdrawalId = requestBody.data.withdrawal_id;
-    failingPayoutReferenceIds.add(withdrawalId);
-
-    const balanceAfterLock = await profileRepository.findOneOrFail({
-      where: { id: affiliateProfileId },
-    });
-    expect(balanceAfterLock.commissionBalance).toBe('50000.00');
-
-    const approveResponse = await request(app.getHttpServer())
-      .post(`/api/v1/admin/withdrawals/${withdrawalId}/approve`)
-      .set('Authorization', `Bearer ${superadminToken}`)
-      .expect(201);
-    const approveBody = approveResponse.body as { data: { status: string } };
-    expect(approveBody.data.status).toBe(WithdrawalStatus.FAILED);
-
-    const failed = await withdrawalRepository.findOneOrFail({
-      where: { id: withdrawalId },
-    });
-    expect(failed.status).toBe(WithdrawalStatus.FAILED);
-
-    const refundedProfile = await profileRepository.findOneOrFail({
-      where: { id: affiliateProfileId },
-    });
-    expect(refundedProfile.commissionBalance).toBe('100000.00');
-
-    // Two entries share this withdrawalId: the debit recorded when the
-    // amount was locked at request time, and this refund credit.
-    const logs = await commissionLogRepository.find({
-      where: { affiliatorId: affiliateProfileId, withdrawalId },
-    });
-    expect(logs).toHaveLength(2);
-    const refundLog = logs.find((log) => log.type === CommissionLogType.CREDIT);
-    expect(refundLog).toBeDefined();
-    expect(refundLog?.amount).toBe('50000.00');
   });
 
   it('rejects a withdrawal request and refunds the balance without contacting LinkQu', async () => {
@@ -481,5 +479,57 @@ describe('Commission crediting and withdrawal (e2e)', () => {
         signature: 'wrong-signature',
       })
       .expect(401);
+  });
+
+  // Placed last: mutates global settings (customer_discount_rate) and
+  // credits more commission to the shared affiliate profile, which would
+  // throw off every balance assertion earlier in this suite if run out of
+  // order.
+  it('splits commission with an upfront customer discount when one is configured', async () => {
+    await request(app.getHttpServer())
+      .patch('/api/v1/admin/settings')
+      .set('Authorization', `Bearer ${superadminToken}`)
+      .send({ customer_discount_rate: 2 })
+      .expect(200);
+
+    const checkoutResponse = await request(app.getHttpServer())
+      .post('/api/v1/topup/checkout')
+      .send({
+        product_id: product.id,
+        target_user_id: '87654321',
+        affiliate_code: affiliateCode,
+      })
+      .expect(201);
+    const checkoutBody = checkoutResponse.body as {
+      data: { transaction_id: string };
+    };
+    const transactionId = checkoutBody.data.transaction_id;
+
+    // sellingPrice 2000000 * 2% = 40000 discount -> charged 1960000.
+    const pendingTransaction = await transactionRepository.findOneOrFail({
+      where: { id: transactionId },
+    });
+    expect(pendingTransaction.grossAmount).toBe('1960000.00');
+    expect(pendingTransaction.customerDiscountAmount).toBe('40000.00');
+
+    await request(app.getHttpServer())
+      .post('/api/v1/webhooks/linkqu/payment')
+      .send({
+        partner_reff: transactionId,
+        amount: 1960000,
+        va_number: '7136490000031689',
+        username: 'LI307GXIN',
+        status: 'SUCCESS',
+        signature: TEST_SIGNATURE,
+      })
+      .expect(200);
+
+    // Full commission would be 2000000 * 10% = 200000; the 40000 discount
+    // comes straight out of that, leaving the affiliate 160000 - not the
+    // full rate on the discounted 1960000 charged amount.
+    const paidTransaction = await transactionRepository.findOneOrFail({
+      where: { id: transactionId },
+    });
+    expect(paidTransaction.affiliateCommission).toBe('160000.00');
   });
 });

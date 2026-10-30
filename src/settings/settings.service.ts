@@ -28,6 +28,7 @@ export class SettingsService {
     globalCommissionRate?: number;
     minimumWithdrawalAmount?: number;
     customAmountMarginRate?: number;
+    customerDiscountRate?: number;
     adminBankName?: string;
     adminAccountNumber?: string;
     adminAccountHolder?: string;
@@ -44,6 +45,9 @@ export class SettingsService {
     if (params.customAmountMarginRate !== undefined) {
       current.customAmountMarginRate =
         params.customAmountMarginRate.toFixed(2);
+    }
+    if (params.customerDiscountRate !== undefined) {
+      current.customerDiscountRate = params.customerDiscountRate.toFixed(2);
     }
     if (params.adminBankName !== undefined) {
       current.adminBankName = params.adminBankName;

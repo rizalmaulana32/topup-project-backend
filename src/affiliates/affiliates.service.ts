@@ -18,7 +18,6 @@ import { Transaction } from '../transactions/entities/transaction.entity';
 import { TransactionsService } from '../transactions/transactions.service';
 import { User, UserRole, UserStatus } from '../users/entities/user.entity';
 import { UsersService } from '../users/users.service';
-import { LinkQuService } from '../linkqu/linkqu.service';
 import { RegisterAffiliateDto } from './dto/register-affiliate.dto';
 import { AffiliatorProfile } from './entities/affiliator-profile.entity';
 import {
@@ -49,7 +48,6 @@ export class AffiliatesService {
     private readonly usersService: UsersService,
     private readonly transactionsService: TransactionsService,
     private readonly settingsService: SettingsService,
-    private readonly linkQuService: LinkQuService,
   ) {}
 
   async register(dto: RegisterAffiliateDto) {
@@ -285,6 +283,7 @@ export class AffiliatesService {
     referralCode: string;
     transactionId: string;
     grossAmount: string;
+    customerDiscountAmount?: string;
   }): Promise<string> {
     const queryRunner = this.dataSource.createQueryRunner();
     await queryRunner.connect();
@@ -312,8 +311,21 @@ export class AffiliatesService {
         return '0.00';
       }
 
-      const commissionAmount =
-        (Number(params.grossAmount) * Number(profile.commissionRate)) / 100;
+      // grossAmount is what was actually charged after any customer
+      // discount, so the discount is added back to recover the original
+      // pre-discount price the commission rate applies to, then the same
+      // discount Rupiah amount is subtracted back out of the commission -
+      // i.e. the customer's cut comes directly out of the affiliate's,
+      // not on top of it. See checkout()'s doc comment for why this
+      // originates at checkout time rather than being re-derived from the
+      // (possibly since-changed) live settings rate here.
+      const discountAmount = Number(params.customerDiscountAmount ?? 0);
+      const originalAmount = Number(params.grossAmount) + discountAmount;
+      const commissionAmount = Math.max(
+        0,
+        (originalAmount * Number(profile.commissionRate)) / 100 -
+          discountAmount,
+      );
       const newBalance = Number(profile.commissionBalance) + commissionAmount;
       const newTotalEarned =
         Number(profile.totalCommissionEarned) + commissionAmount;
@@ -448,15 +460,13 @@ export class AffiliatesService {
   }
 
   /**
-   * Approves a withdrawal and sends it to LinkQu. Unlike Duitku's Transfer
-   * Online (always resolved synchronously, no callback), LinkQu's
-   * withdraw/payment can genuinely come back PENDING per LinkQu's own
-   * documented handling rules - in that case the withdrawal is parked in
-   * `approved` (previously dead code under Duitku, now live) and resolved
-   * later by the real LinkQu disbursement callback (see
-   * handleDisbursementCallback) or a future reconciliation poll. An
-   * immediate SUCCESS or FAILED result still resolves right away, same as
-   * the old Duitku UX for the common case.
+   * Approves a withdrawal request (SRS/per Ricky, 2026-10-23: approval no
+   * longer triggers a real LinkQu disbursement - the client found LinkQu's
+   * synchronous disbursement failing in production (SALDO TIDAK CUKUP on
+   * WDW-20261011-8196) too disruptive, and wants the actual bank transfer
+   * done manually outside the system instead). This step only records that
+   * an admin has signed off; see markWithdrawalProcessed for the second
+   * step once the manual transfer is actually done.
    */
   async approveWithdrawal(
     withdrawalId: string,
@@ -470,35 +480,38 @@ export class AffiliatesService {
       );
     }
 
-    const payout = await this.linkQuService.createPayout({
-      referenceId: withdrawal.id,
-      amount: Number(withdrawal.amount),
-      bankName: withdrawal.bankName,
-      accountNumber: withdrawal.accountNumber,
-      accountHolder: withdrawal.accountHolder,
-      description: `Commission withdrawal ${withdrawal.id}`,
-    });
+    withdrawal.status = WithdrawalStatus.APPROVED;
+    withdrawal.approvedBy = adminUserId;
+    withdrawal.approvedAt = new Date();
+    return this.withdrawalRepository.save(withdrawal);
+  }
 
-    withdrawal.linkQuDisbursementId = payout.payoutId;
+  /**
+   * Marks a withdrawal as paid after an admin has manually transferred the
+   * funds (outside the system - see approveWithdrawal's doc comment for
+   * why). `notes` is meant for a transfer reference/proof so the paid
+   * record isn't just a bare timestamp.
+   */
+  async markWithdrawalProcessed(
+    withdrawalId: string,
+    adminUserId: string,
+    notes?: string,
+  ): Promise<CommissionWithdrawal> {
+    const withdrawal = await this.findWithdrawalByIdOrFail(withdrawalId);
+
+    if (withdrawal.status !== WithdrawalStatus.APPROVED) {
+      throw new ConflictException(
+        `Withdrawal ${withdrawalId} is not approved (current status: ${withdrawal.status})`,
+      );
+    }
+
+    withdrawal.status = WithdrawalStatus.PAID;
     withdrawal.processedBy = adminUserId;
     withdrawal.processedAt = new Date();
-
-    if (payout.status === 'PAID') {
-      withdrawal.status = WithdrawalStatus.PAID;
-      return this.withdrawalRepository.save(withdrawal);
+    if (notes) {
+      withdrawal.adminNotes = notes;
     }
-
-    if (payout.status === 'PENDING') {
-      withdrawal.status = WithdrawalStatus.APPROVED;
-      return this.withdrawalRepository.save(withdrawal);
-    }
-
-    await this.withdrawalRepository.save(withdrawal);
-    await this.refundFailedWithdrawal(
-      withdrawal,
-      `LinkQu disbursement failed: ${payout.responseDesc} (${payout.responseCode})`,
-    );
-    return this.findWithdrawalByIdOrFail(withdrawalId);
+    return this.withdrawalRepository.save(withdrawal);
   }
 
   /**

@@ -40,8 +40,9 @@ describe('TopupService', () => {
     Pick<LinkQuService, 'createInvoice' | 'checkTransactionStatus'>
   >;
   let creditCommissionMock: jest.Mock;
+  let checkCodeValidityMock: jest.Mock;
   let affiliatesService: jest.Mocked<
-    Pick<AffiliatesService, 'creditCommissionForTransaction'>
+    Pick<AffiliatesService, 'creditCommissionForTransaction' | 'checkCodeValidity'>
   >;
   let creditRevenueMock: jest.Mock;
   let platformService: jest.Mocked<
@@ -89,15 +90,21 @@ describe('TopupService', () => {
       checkTransactionStatus: jest.fn(),
     };
     creditCommissionMock = jest.fn().mockResolvedValue('0.00');
+    checkCodeValidityMock = jest
+      .fn()
+      .mockResolvedValue({ valid: false, affiliateName: null });
     affiliatesService = {
       creditCommissionForTransaction: creditCommissionMock,
+      checkCodeValidity: checkCodeValidityMock,
     };
     creditRevenueMock = jest.fn();
     platformService = {
       creditRevenueForTransaction: creditRevenueMock,
     };
     settingsService = {
-      get: jest.fn().mockResolvedValue({ customAmountMarginRate: '0' }),
+      get: jest
+        .fn()
+        .mockResolvedValue({ customAmountMarginRate: '0', customerDiscountRate: '0' }),
     };
 
     service = new TopupService(
@@ -204,8 +211,12 @@ describe('TopupService', () => {
   });
 
   describe('checkout', () => {
-    it('creates a pending transaction, requests a LinkQu payment link, and attaches it', async () => {
+    it('creates a pending transaction, requests a LinkQu payment link, and attaches it (no discount - code does not actually earn commission)', async () => {
       productsService.findActiveByIdOrFail.mockResolvedValue(product);
+      checkCodeValidityMock.mockResolvedValue({
+        valid: false,
+        affiliateName: null,
+      });
       transactionsService.createPending.mockResolvedValue({
         id: 'TRX-20260805-0001',
       } as any);
@@ -228,6 +239,8 @@ describe('TopupService', () => {
         targetUserId: '1',
         targetZoneId: '99',
         referralCode: 'AFF123',
+        grossAmount: '20000',
+        customerDiscountAmount: '0.00',
       });
       expect(linkQuService.createInvoice).toHaveBeenCalledWith({
         externalId: 'TRX-20260805-0001',
@@ -243,6 +256,72 @@ describe('TopupService', () => {
         linkqu_reference: '715',
         invoice_url:
           'https://cognos.linkqu.id/pay/0945572d-116b-4fc8-aa05-c43caa358491',
+      });
+    });
+
+    it('does not apply a discount when no affiliate_code is given', async () => {
+      productsService.findActiveByIdOrFail.mockResolvedValue(product);
+      transactionsService.createPending.mockResolvedValue({
+        id: 'TRX-20260805-0002',
+      } as any);
+      linkQuService.createInvoice.mockResolvedValue({
+        invoiceId: '716',
+        invoiceUrl: 'https://cognos.linkqu.id/pay/x',
+        status: '00',
+      });
+
+      await service.checkout({
+        product_id: '1',
+        target_user_id: '1',
+      });
+
+      expect(checkCodeValidityMock).not.toHaveBeenCalled();
+      expect(transactionsService.createPending).toHaveBeenCalledWith(
+        expect.objectContaining({
+          grossAmount: '20000',
+          customerDiscountAmount: '0.00',
+        }),
+      );
+    });
+
+    it('discounts the charged price when a code that actually earns commission is used, funded by settings.customerDiscountRate', async () => {
+      productsService.findActiveByIdOrFail.mockResolvedValue(product);
+      checkCodeValidityMock.mockResolvedValue({
+        valid: true,
+        affiliateName: 'Commission Affiliate',
+      });
+      settingsService.get.mockResolvedValue({
+        customAmountMarginRate: '0',
+        customerDiscountRate: '5',
+      } as any);
+      transactionsService.createPending.mockResolvedValue({
+        id: 'TRX-20260805-0003',
+      } as any);
+      linkQuService.createInvoice.mockResolvedValue({
+        invoiceId: '717',
+        invoiceUrl: 'https://cognos.linkqu.id/pay/y',
+        status: '00',
+      });
+
+      await service.checkout({
+        product_id: '1',
+        target_user_id: '1',
+        affiliate_code: 'AFF123',
+      });
+
+      // sellingPrice 20000 * 5% = 1000 discount -> charged 19000.
+      expect(transactionsService.createPending).toHaveBeenCalledWith({
+        product,
+        targetUserId: '1',
+        targetZoneId: undefined,
+        referralCode: 'AFF123',
+        grossAmount: '19000.00',
+        customerDiscountAmount: '1000.00',
+      });
+      expect(linkQuService.createInvoice).toHaveBeenCalledWith({
+        externalId: 'TRX-20260805-0003',
+        amount: 19000,
+        description: 'Top-up 120 Diamonds for 1',
       });
     });
   });

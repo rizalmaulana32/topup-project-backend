@@ -8,11 +8,13 @@ import { SettingsService } from '../settings/settings.service';
 import { TransactionsService } from '../transactions/transactions.service';
 import { UserRole, UserStatus } from '../users/entities/user.entity';
 import { UsersService } from '../users/users.service';
-import { LinkQuService } from '../linkqu/linkqu.service';
 import { AffiliatesService } from './affiliates.service';
 import { AffiliatorProfile } from './entities/affiliator-profile.entity';
 import { CommissionLog } from './entities/commission-log.entity';
-import { CommissionWithdrawal } from './entities/commission-withdrawal.entity';
+import {
+  CommissionWithdrawal,
+  WithdrawalStatus,
+} from './entities/commission-withdrawal.entity';
 
 describe('AffiliatesService', () => {
   let profileCreateMock: jest.Mock;
@@ -20,6 +22,7 @@ describe('AffiliatesService', () => {
   let profileFindOneMock: jest.Mock;
   let commissionLogFindMock: jest.Mock;
   let withdrawalFindOneMock: jest.Mock;
+  let withdrawalSaveMock: jest.Mock;
   let createUserMock: jest.Mock;
   let updateStatusMock: jest.Mock;
   let archiveEmailForReuseMock: jest.Mock;
@@ -40,6 +43,7 @@ describe('AffiliatesService', () => {
     profileFindOneMock = jest.fn();
     commissionLogFindMock = jest.fn();
     withdrawalFindOneMock = jest.fn();
+    withdrawalSaveMock = jest.fn((entity) => Promise.resolve(entity));
     createUserMock = jest.fn();
     updateStatusMock = jest.fn();
     archiveEmailForReuseMock = jest.fn();
@@ -58,6 +62,7 @@ describe('AffiliatesService', () => {
     } as unknown as Repository<CommissionLog>;
     const withdrawalRepository = {
       findOne: withdrawalFindOneMock,
+      save: withdrawalSaveMock,
     } as unknown as Repository<CommissionWithdrawal>;
     const dataSource = {} as unknown as DataSource;
     const usersService = {
@@ -71,7 +76,6 @@ describe('AffiliatesService', () => {
     const settingsService = {
       get: settingsGetMock,
     } as unknown as SettingsService;
-    const linkQuService = {} as unknown as LinkQuService;
 
     service = new AffiliatesService(
       profileRepository,
@@ -81,7 +85,6 @@ describe('AffiliatesService', () => {
       usersService,
       transactionsService,
       settingsService,
-      linkQuService,
     );
   });
 
@@ -314,6 +317,66 @@ describe('AffiliatesService', () => {
       await expect(
         service.findWithdrawalByIdOrFail('WDW-missing'),
       ).rejects.toBeInstanceOf(NotFoundException);
+    });
+  });
+
+  describe('approveWithdrawal', () => {
+    it('moves a pending withdrawal to approved without any disbursement call', async () => {
+      withdrawalFindOneMock.mockResolvedValue({
+        id: 'WDW-1',
+        status: WithdrawalStatus.PENDING,
+      });
+
+      const result = await service.approveWithdrawal('WDW-1', 'admin-1');
+
+      expect(result.status).toBe(WithdrawalStatus.APPROVED);
+      expect(result.approvedBy).toBe('admin-1');
+      expect(result.approvedAt).toBeInstanceOf(Date);
+      expect(withdrawalSaveMock).toHaveBeenCalledTimes(1);
+    });
+
+    it('throws ConflictException when the withdrawal is not pending', async () => {
+      withdrawalFindOneMock.mockResolvedValue({
+        id: 'WDW-1',
+        status: WithdrawalStatus.APPROVED,
+      });
+
+      await expect(
+        service.approveWithdrawal('WDW-1', 'admin-1'),
+      ).rejects.toBeInstanceOf(ConflictException);
+      expect(withdrawalSaveMock).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('markWithdrawalProcessed', () => {
+    it('moves an approved withdrawal to paid and records the admin note', async () => {
+      withdrawalFindOneMock.mockResolvedValue({
+        id: 'WDW-1',
+        status: WithdrawalStatus.APPROVED,
+      });
+
+      const result = await service.markWithdrawalProcessed(
+        'WDW-1',
+        'admin-1',
+        'Transferred manually, ref 123',
+      );
+
+      expect(result.status).toBe(WithdrawalStatus.PAID);
+      expect(result.processedBy).toBe('admin-1');
+      expect(result.processedAt).toBeInstanceOf(Date);
+      expect(result.adminNotes).toBe('Transferred manually, ref 123');
+    });
+
+    it('throws ConflictException when the withdrawal is not approved', async () => {
+      withdrawalFindOneMock.mockResolvedValue({
+        id: 'WDW-1',
+        status: WithdrawalStatus.PENDING,
+      });
+
+      await expect(
+        service.markWithdrawalProcessed('WDW-1', 'admin-1'),
+      ).rejects.toBeInstanceOf(ConflictException);
+      expect(withdrawalSaveMock).not.toHaveBeenCalled();
     });
   });
 

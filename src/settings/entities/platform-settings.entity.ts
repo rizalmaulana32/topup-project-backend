@@ -47,6 +47,24 @@ export class PlatformSettings {
   customAmountMarginRate: string;
 
   /**
+   * Percentage of a referred order's original price passed back to the
+   * CUSTOMER as an upfront checkout discount, funded by reducing the
+   * affiliate's commission by the same amount (client request 2026-10-31:
+   * referred purchase should split the commission rate between affiliate
+   * and customer, not pay the affiliate the full rate - see
+   * AffiliatesService.creditCommissionForTransaction). Defaults to 0 so
+   * existing commission behavior is unchanged until a superadmin sets it.
+   */
+  @Column({
+    name: 'customer_discount_rate',
+    type: 'decimal',
+    precision: 5,
+    scale: 2,
+    default: 0,
+  })
+  customerDiscountRate: string;
+
+  /**
    * The platform's own accumulated revenue (sellingPrice - basePrice -
    * commission paid, credited on every successfully-injected paid
    * transaction — see PlatformService.creditRevenueForTransaction),

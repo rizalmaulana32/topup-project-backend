@@ -64,6 +64,14 @@ export class CommissionWithdrawal {
   @Column({ name: 'admin_notes', type: 'varchar', nullable: true })
   adminNotes: string | null;
 
+  /** Who/when an admin approved the request on our web (no money moved yet). */
+  @Column({ name: 'approved_by', type: 'bigint', nullable: true })
+  approvedBy: string | null;
+
+  @Column({ name: 'approved_at', type: 'timestamptz', nullable: true })
+  approvedAt: Date | null;
+
+  /** Who/when an admin marked the manual bank transfer as done. */
   @Column({ name: 'processed_by', type: 'bigint', nullable: true })
   processedBy: string | null;
 

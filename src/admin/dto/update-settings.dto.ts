@@ -23,6 +23,11 @@ export class UpdateSettingsDto {
   custom_amount_margin_rate?: number;
 
   @IsOptional()
+  @IsNumber()
+  @Min(0)
+  customer_discount_rate?: number;
+
+  @IsOptional()
   @IsString()
   @IsNotEmpty()
   admin_bank_name?: string;
