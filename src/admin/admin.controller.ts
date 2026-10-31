@@ -334,13 +334,30 @@ export class AdminController {
   async listWithdrawals(@Query() query: ListWithdrawalsDto) {
     const result = await this.affiliatesService.findAllWithdrawals({
       status: query.status,
+      search: query.search,
       limit: query.limit ?? 20,
       offset: query.offset ?? 0,
     });
     return {
       success: true,
       data: {
-        items: result.items,
+        items: result.items.map((withdrawal) => ({
+          id: withdrawal.id,
+          affiliator_id: withdrawal.affiliatorId,
+          affiliator_name: withdrawal.affiliator?.user?.name ?? null,
+          affiliator_email: withdrawal.affiliator?.user?.email ?? null,
+          amount: withdrawal.amount,
+          bank_name: withdrawal.bankName,
+          account_number: withdrawal.accountNumber,
+          account_holder: withdrawal.accountHolder,
+          status: withdrawal.status,
+          admin_notes: withdrawal.adminNotes,
+          approved_by: withdrawal.approvedBy,
+          approved_at: withdrawal.approvedAt,
+          processed_by: withdrawal.processedBy,
+          processed_at: withdrawal.processedAt,
+          created_at: withdrawal.createdAt,
+        })),
         total: result.total,
         limit: query.limit ?? 20,
         offset: query.offset ?? 0,
@@ -441,6 +458,7 @@ export class AdminController {
   @ApiOperation({ summary: 'Monitor transactions' })
   async listTransactions(@Query() query: ListTransactionsDto) {
     const result = await this.transactionsService.findAll({
+      status: query.status,
       limit: query.limit ?? 20,
       offset: query.offset ?? 0,
     });

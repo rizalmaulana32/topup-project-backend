@@ -102,11 +102,16 @@ export class TransactionsService {
     });
   }
 
-  async findAll(params: { limit: number; offset: number }): Promise<{
+  async findAll(params: {
+    status?: PaymentStatus;
+    limit: number;
+    offset: number;
+  }): Promise<{
     items: Transaction[];
     total: number;
   }> {
     const [items, total] = await this.transactionRepository.findAndCount({
+      where: params.status ? { paymentStatus: params.status } : {},
       order: { createdAt: 'DESC' },
       take: params.limit,
       skip: params.offset,

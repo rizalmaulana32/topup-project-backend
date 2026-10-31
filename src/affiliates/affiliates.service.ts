@@ -770,15 +770,29 @@ export class AffiliatesService {
 
   async findAllWithdrawals(params: {
     status?: WithdrawalStatus;
+    search?: string;
     limit: number;
     offset: number;
   }): Promise<{ items: CommissionWithdrawal[]; total: number }> {
-    const [items, total] = await this.withdrawalRepository.findAndCount({
-      where: params.status ? { status: params.status } : {},
-      order: { createdAt: 'DESC' },
-      take: params.limit,
-      skip: params.offset,
-    });
+    const qb = this.withdrawalRepository
+      .createQueryBuilder('withdrawal')
+      .leftJoinAndSelect('withdrawal.affiliator', 'affiliator')
+      .leftJoinAndSelect('affiliator.user', 'user')
+      .orderBy('withdrawal.createdAt', 'DESC')
+      .take(params.limit)
+      .skip(params.offset);
+
+    if (params.status) {
+      qb.andWhere('withdrawal.status = :status', { status: params.status });
+    }
+
+    if (params.search) {
+      qb.andWhere('(user.name ILIKE :search OR user.email ILIKE :search)', {
+        search: `%${params.search}%`,
+      });
+    }
+
+    const [items, total] = await qb.getManyAndCount();
     return { items, total };
   }
 }
