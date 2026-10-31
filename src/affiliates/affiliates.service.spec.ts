@@ -24,6 +24,7 @@ describe('AffiliatesService', () => {
   let withdrawalFindOneMock: jest.Mock;
   let withdrawalSaveMock: jest.Mock;
   let createUserMock: jest.Mock;
+  let findByEmailMock: jest.Mock;
   let updateStatusMock: jest.Mock;
   let archiveEmailForReuseMock: jest.Mock;
   let updatePasswordHashMock: jest.Mock;
@@ -46,6 +47,7 @@ describe('AffiliatesService', () => {
     withdrawalFindOneMock = jest.fn();
     withdrawalSaveMock = jest.fn((entity) => Promise.resolve(entity));
     createUserMock = jest.fn();
+    findByEmailMock = jest.fn();
     updateStatusMock = jest.fn();
     archiveEmailForReuseMock = jest.fn();
     updatePasswordHashMock = jest.fn();
@@ -69,6 +71,7 @@ describe('AffiliatesService', () => {
     const dataSource = {} as unknown as DataSource;
     const usersService = {
       createUser: createUserMock,
+      findByEmail: findByEmailMock,
       updateStatus: updateStatusMock,
       archiveEmailForReuse: archiveEmailForReuseMock,
       updatePasswordHash: updatePasswordHashMock,
@@ -360,6 +363,22 @@ describe('AffiliatesService', () => {
         service.resetPassword('999', 'a-new-secret-password'),
       ).rejects.toBeInstanceOf(NotFoundException);
       expect(updatePasswordHashMock).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('isEmailRegistered', () => {
+    it('returns true when a user with that email exists', async () => {
+      findByEmailMock.mockResolvedValue({ id: '1', email: 'a@b.com' });
+
+      await expect(service.isEmailRegistered('a@b.com')).resolves.toBe(true);
+    });
+
+    it('returns false when no user has that email', async () => {
+      findByEmailMock.mockResolvedValue(null);
+
+      await expect(service.isEmailRegistered('nobody@b.com')).resolves.toBe(
+        false,
+      );
     });
   });
 

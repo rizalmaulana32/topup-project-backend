@@ -4,10 +4,12 @@ import {
   Get,
   Patch,
   Post,
+  Query,
   Req,
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
+import { Throttle, ThrottlerGuard } from '@nestjs/throttler';
 import { Request } from 'express';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { Roles } from '../auth/roles.decorator';
@@ -15,6 +17,7 @@ import { RolesGuard } from '../auth/roles.guard';
 import { AuthenticatedUser } from '../auth/types/jwt-payload';
 import { UserRole } from '../users/entities/user.entity';
 import { AffiliatesService } from './affiliates.service';
+import { CheckEmailDto } from './dto/check-email.dto';
 import { RegisterAffiliateDto } from './dto/register-affiliate.dto';
 import { UpdateBankDetailsDto } from './dto/update-bank-details.dto';
 import { WithdrawDto } from './dto/withdraw.dto';
@@ -31,6 +34,20 @@ export class AffiliatesController {
   async register(@Body() dto: RegisterAffiliateDto) {
     const data = await this.affiliatesService.register(dto);
     return { success: true, data };
+  }
+
+  @Get('check-email')
+  @UseGuards(ThrottlerGuard)
+  @Throttle({ default: { limit: 10, ttl: 60000 } })
+  @ApiOperation({
+    summary:
+      'Check whether an email is already registered, before filling out the full registration form',
+  })
+  async checkEmail(@Query() query: CheckEmailDto) {
+    const registered = await this.affiliatesService.isEmailRegistered(
+      query.email,
+    );
+    return { success: true, data: { registered } };
   }
 
   @Get('dashboard')

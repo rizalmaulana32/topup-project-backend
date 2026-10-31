@@ -54,6 +54,11 @@ export class AffiliatesService {
     private readonly settingsService: SettingsService,
   ) {}
 
+  async isEmailRegistered(email: string): Promise<boolean> {
+    const user = await this.usersService.findByEmail(email);
+    return user !== null;
+  }
+
   async register(dto: RegisterAffiliateDto) {
     const passwordHash = await bcrypt.hash(dto.password, BCRYPT_SALT_ROUNDS);
     const settings = await this.settingsService.get();
