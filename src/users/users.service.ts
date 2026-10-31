@@ -42,6 +42,10 @@ export class UsersService {
     await this.userRepository.update(id, { status });
   }
 
+  async updatePasswordHash(id: string, passwordHash: string): Promise<void> {
+    await this.userRepository.update(id, { passwordHash });
+  }
+
   /**
    * Frees up a deactivated user's email for reuse by a brand new
    * registration, without losing any historical data on this row

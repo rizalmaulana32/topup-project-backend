@@ -45,6 +45,7 @@ import { ListWithdrawalsDto } from './dto/list-withdrawals.dto';
 import { PlatformWithdrawDto } from '../platform/dto/platform-withdraw.dto';
 import { ProcessWithdrawalDto } from './dto/process-withdrawal.dto';
 import { ProviderCoinTransferDto } from './dto/provider-coin-transfer.dto';
+import { ResetAffiliatePasswordDto } from './dto/reset-affiliate-password.dto';
 import { SetTieredCommissionDto } from './dto/set-tiered-commission.dto';
 import { UpdateCommissionRateDto } from './dto/update-commission-rate.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
@@ -207,6 +208,24 @@ export class AdminController {
         current_period_volume: profile.currentPeriodVolume,
       },
     };
+  }
+
+  @Post('affiliates/:id/reset-password')
+  @ApiOperation({
+    summary:
+      "Reset a locked-out affiliate's password (no self-service forgot-password flow exists yet)",
+  })
+  @ApiParam({
+    name: 'id',
+    description:
+      'The affiliate PROFILE ID (not user_id) - see profile_id in the GET /admin/affiliates response.',
+  })
+  async resetAffiliatePassword(
+    @Param('id') id: string,
+    @Body() dto: ResetAffiliatePasswordDto,
+  ) {
+    await this.affiliatesService.resetPassword(id, dto.new_password);
+    return { success: true };
   }
 
   @Get('settings')

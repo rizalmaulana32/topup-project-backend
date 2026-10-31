@@ -26,6 +26,7 @@ describe('AffiliatesService', () => {
   let createUserMock: jest.Mock;
   let updateStatusMock: jest.Mock;
   let archiveEmailForReuseMock: jest.Mock;
+  let updatePasswordHashMock: jest.Mock;
   let profileSoftDeleteMock: jest.Mock;
   let findByReferralCodeMock: jest.Mock;
   let settingsGetMock: jest.Mock;
@@ -47,6 +48,7 @@ describe('AffiliatesService', () => {
     createUserMock = jest.fn();
     updateStatusMock = jest.fn();
     archiveEmailForReuseMock = jest.fn();
+    updatePasswordHashMock = jest.fn();
     profileSoftDeleteMock = jest.fn();
     findByReferralCodeMock = jest.fn();
     settingsGetMock = jest.fn().mockResolvedValue(defaultSettings);
@@ -69,6 +71,7 @@ describe('AffiliatesService', () => {
       createUser: createUserMock,
       updateStatus: updateStatusMock,
       archiveEmailForReuse: archiveEmailForReuseMock,
+      updatePasswordHash: updatePasswordHashMock,
     } as unknown as UsersService;
     const transactionsService = {
       findByReferralCode: findByReferralCodeMock,
@@ -332,6 +335,31 @@ describe('AffiliatesService', () => {
       await expect(
         service.setTieredCommissionEnabled('999', true),
       ).rejects.toBeInstanceOf(NotFoundException);
+    });
+  });
+
+  describe('resetPassword', () => {
+    it('hashes the new password and updates the linked user', async () => {
+      profileFindOneMock.mockResolvedValue({ id: '1', userId: '42' });
+
+      await service.resetPassword('1', 'a-new-secret-password');
+
+      expect(updatePasswordHashMock).toHaveBeenCalledWith(
+        '42',
+        expect.any(String),
+      );
+      const hashUsed = updatePasswordHashMock.mock.calls[0][1] as string;
+      expect(hashUsed).not.toBe('a-new-secret-password');
+      expect(hashUsed.startsWith('$2b$')).toBe(true);
+    });
+
+    it('throws NotFoundException for an unknown profile', async () => {
+      profileFindOneMock.mockResolvedValue(null);
+
+      await expect(
+        service.resetPassword('999', 'a-new-secret-password'),
+      ).rejects.toBeInstanceOf(NotFoundException);
+      expect(updatePasswordHashMock).not.toHaveBeenCalled();
     });
   });
 

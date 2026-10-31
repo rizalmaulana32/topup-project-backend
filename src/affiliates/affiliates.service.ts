@@ -241,6 +241,17 @@ export class AffiliatesService {
   }
 
   /**
+   * Admin-side password reset for an affiliate who's locked out - there is
+   * no self-service "forgot password" flow (Ricky, 2026-10-31), so this is
+   * the only way back in until one exists.
+   */
+  async resetPassword(profileId: string, newPassword: string): Promise<void> {
+    const profile = await this.findProfileByIdOrFail(profileId);
+    const passwordHash = await bcrypt.hash(newPassword, BCRYPT_SALT_ROUNDS);
+    await this.usersService.updatePasswordHash(profile.userId, passwordHash);
+  }
+
+  /**
    * Lets an affiliate add/update their own bank payout details after
    * registration - previously there was no way to do this at all once
    * registered (client-reported gap). Only affects the profile itself;
