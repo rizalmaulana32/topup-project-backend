@@ -517,7 +517,8 @@ export class AdminController {
 
   @Get('linkqu/balance')
   @ApiOperation({
-    summary: "Check the merchant's LinkQu account balance",
+    summary:
+      "Check the merchant's LinkQu account balance - saldo_simpanan is LinkQu's own available/withdrawable balance, saldo_ditahan is pending settlement (see LinkQu's 'Data Saya' page for the same two figures)",
   })
   async getLinkQuBalance() {
     const result = await this.linkQuService.checkBalance();
@@ -525,7 +526,15 @@ export class AdminController {
       success: result.success,
       data: {
         balance: result.balance,
+        saldo_simpanan: result.balance,
         unsettle_amount: result.unsettleAmount,
+        saldo_ditahan: result.unsettleAmount,
+        unsettle_data: result.unsettleData.map((item) => ({
+          transaction_date: item.transactionDate,
+          settlement_date: item.settlementDate,
+          settlement_amount: item.settlementAmount,
+          product_name: item.productName,
+        })),
         response_code: result.responseCode,
         response_desc: result.responseDesc,
       },

@@ -52,10 +52,18 @@ export interface TransactionStatusResult {
   fee: string | null;
 }
 
+export interface UnsettleItem {
+  transactionDate: string;
+  settlementDate: string;
+  settlementAmount: number;
+  productName: string;
+}
+
 export interface CheckBalanceResult {
   success: boolean;
   balance: number | null;
   unsettleAmount: number | null;
+  unsettleData: UnsettleItem[];
   responseCode: string;
   responseDesc: string;
 }
@@ -105,7 +113,16 @@ interface LinkQuResumeAccountResponse {
   rc?: string;
   rd?: string;
   balance?: number;
-  data?: { balance?: string | number; unsettle_amount?: number };
+  data?: {
+    balance?: string | number;
+    unsettle_amount?: number;
+    unsettle_data?: {
+      transaction_date?: string;
+      settlement_date?: string;
+      settlement_amount?: number;
+      product_name?: string;
+    }[];
+  };
 }
 
 /**
@@ -509,6 +526,12 @@ export class LinkQuService {
         body.data?.unsettle_amount != null
           ? Number(body.data.unsettle_amount)
           : null,
+      unsettleData: (body.data?.unsettle_data ?? []).map((item) => ({
+        transactionDate: item.transaction_date ?? '',
+        settlementDate: item.settlement_date ?? '',
+        settlementAmount: Number(item.settlement_amount ?? 0),
+        productName: item.product_name ?? '',
+      })),
       responseCode: body.rc ?? 'UNKNOWN',
       responseDesc: body.rd ?? '',
     };
