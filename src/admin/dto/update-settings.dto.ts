@@ -28,6 +28,11 @@ export class UpdateSettingsDto {
   customer_discount_rate?: number;
 
   @IsOptional()
+  @IsNumber()
+  @Min(0)
+  customer_discount_min_amount?: number;
+
+  @IsOptional()
   @IsString()
   @IsNotEmpty()
   admin_bank_name?: string;

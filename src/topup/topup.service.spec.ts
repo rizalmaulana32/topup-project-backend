@@ -293,6 +293,7 @@ describe('TopupService', () => {
       settingsService.get.mockResolvedValue({
         customAmountMarginRate: '0',
         customerDiscountRate: '5',
+        customerDiscountMinAmount: '0',
       } as any);
       transactionsService.createPending.mockResolvedValue({
         id: 'TRX-20260805-0003',
@@ -322,6 +323,44 @@ describe('TopupService', () => {
         externalId: 'TRX-20260805-0003',
         amount: 19000,
         description: 'Top-up 120 Diamonds for 1',
+      });
+    });
+
+    it('does not discount a referred purchase below customerDiscountMinAmount', async () => {
+      productsService.findActiveByIdOrFail.mockResolvedValue(product);
+      checkCodeValidityMock.mockResolvedValue({
+        valid: true,
+        affiliateName: 'Commission Affiliate',
+      });
+      settingsService.get.mockResolvedValue({
+        customAmountMarginRate: '0',
+        customerDiscountRate: '5',
+        customerDiscountMinAmount: '350000',
+      } as any);
+      transactionsService.createPending.mockResolvedValue({
+        id: 'TRX-20260805-0004',
+      } as any);
+      linkQuService.createInvoice.mockResolvedValue({
+        invoiceId: '718',
+        invoiceUrl: 'https://cognos.linkqu.id/pay/z',
+        status: '00',
+      });
+
+      await service.checkout({
+        product_id: '1',
+        target_user_id: '1',
+        affiliate_code: 'AFF123',
+      });
+
+      // sellingPrice 20000 is below the 350000 minimum, so no discount
+      // applies even though the code earns commission and the rate is 5%.
+      expect(transactionsService.createPending).toHaveBeenCalledWith({
+        product,
+        targetUserId: '1',
+        targetZoneId: undefined,
+        referralCode: 'AFF123',
+        grossAmount: '20000',
+        customerDiscountAmount: '0.00',
       });
     });
   });

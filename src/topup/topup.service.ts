@@ -132,11 +132,19 @@ export class TopupService {
       );
       if (codeCheck.valid) {
         const settings = await this.settingsService.get();
-        const discountRate = Number(settings.customerDiscountRate);
-        const discount =
-          Math.round(Number(product.sellingPrice) * discountRate) / 100;
-        customerDiscountAmount = discount.toFixed(2);
-        chargedAmount = (Number(product.sellingPrice) - discount).toFixed(2);
+        const minAmount = Number(settings.customerDiscountMinAmount);
+        // Below this, no bonus/discount at all (client request via Ricky
+        // 2026-10-31: "soale 350 munggah onok bonus e" - the bonus only
+        // exists from Rp350.000 up).
+        if (Number(product.sellingPrice) >= minAmount) {
+          const discountRate = Number(settings.customerDiscountRate);
+          const discount =
+            Math.round(Number(product.sellingPrice) * discountRate) / 100;
+          customerDiscountAmount = discount.toFixed(2);
+          chargedAmount = (Number(product.sellingPrice) - discount).toFixed(
+            2,
+          );
+        }
       }
     }
 

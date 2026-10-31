@@ -65,6 +65,22 @@ export class PlatformSettings {
   customerDiscountRate: string;
 
   /**
+   * Minimum transaction amount (sellingPrice) for customerDiscountRate to
+   * apply at all - below this, a referred purchase pays the affiliate the
+   * full commission rate with no customer discount (client request via
+   * Ricky 2026-10-31: "soale 350 munggah onok bonus e" - the bonus only
+   * exists from Rp350.000 up). Defaults to 350000 to match that.
+   */
+  @Column({
+    name: 'customer_discount_min_amount',
+    type: 'decimal',
+    precision: 14,
+    scale: 2,
+    default: 350000,
+  })
+  customerDiscountMinAmount: string;
+
+  /**
    * The platform's own accumulated revenue (sellingPrice - basePrice -
    * commission paid, credited on every successfully-injected paid
    * transaction — see PlatformService.creditRevenueForTransaction),
