@@ -78,6 +78,7 @@ export class AdminController {
   async listAffiliates(@Query() query: ListAffiliatesDto) {
     const result = await this.affiliatesService.findAllProfiles({
       status: query.status,
+      search: query.search,
       limit: query.limit ?? 20,
       offset: query.offset ?? 0,
     });

@@ -737,16 +737,29 @@ export class AffiliatesService {
    */
   async findAllProfiles(params: {
     status?: UserStatus;
+    search?: string;
     limit: number;
     offset: number;
   }): Promise<{ items: AffiliatorProfile[]; total: number }> {
-    const [items, total] = await this.profileRepository.findAndCount({
-      relations: { user: true },
-      where: params.status ? { user: { status: params.status } } : {},
-      order: { createdAt: 'DESC' },
-      take: params.limit,
-      skip: params.offset,
-    });
+    const qb = this.profileRepository
+      .createQueryBuilder('profile')
+      .leftJoinAndSelect('profile.user', 'user')
+      .orderBy('profile.createdAt', 'DESC')
+      .take(params.limit)
+      .skip(params.offset);
+
+    if (params.status) {
+      qb.andWhere('user.status = :status', { status: params.status });
+    }
+
+    if (params.search) {
+      qb.andWhere(
+        '(user.name ILIKE :search OR user.email ILIKE :search OR CAST(profile.id AS TEXT) ILIKE :search)',
+        { search: `%${params.search}%` },
+      );
+    }
+
+    const [items, total] = await qb.getManyAndCount();
     return { items, total };
   }
 
