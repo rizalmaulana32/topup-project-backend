@@ -14,6 +14,7 @@ import { AffiliatesModule } from './affiliates/affiliates.module';
 import { SettingsModule } from './settings/settings.module';
 import { AdminModule } from './admin/admin.module';
 import { ContactModule } from './contact/contact.module';
+import { ManualTopupModule } from './manual-topup/manual-topup.module';
 
 @Module({
   imports: [
@@ -44,6 +45,7 @@ import { ContactModule } from './contact/contact.module';
     SettingsModule,
     AdminModule,
     ContactModule,
+    ManualTopupModule,
   ],
   controllers: [AppController],
   providers: [AppService],

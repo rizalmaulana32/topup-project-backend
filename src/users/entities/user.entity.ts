@@ -7,6 +7,13 @@ import {
 
 export enum UserRole {
   SUPERADMIN = 'superadmin',
+  /**
+   * Manual-send-only role (client request via Ricky 2026-11-02): can only
+   * create manual top-ups against an owner-assigned coin budget - no
+   * access to any other /admin/* route. See ManualTopupController /
+   * AdminProfile.
+   */
+  ADMIN = 'admin',
   AFFILIATOR = 'affiliator',
   CUSTOMER = 'customer',
 }
