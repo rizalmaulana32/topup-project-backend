@@ -67,6 +67,7 @@ describe('Admin (e2e)', () => {
         bank_name: 'BCA',
         account_number: '1234567890',
         account_holder: 'Pending Affiliate',
+        phone_number: '081234567890',
       })
       .expect(201);
     const body = response.body as { data: { user_id: string } };
@@ -238,6 +239,71 @@ describe('Admin (e2e)', () => {
     expect(user.status).toBe(UserStatus.ACTIVE);
   });
 
+  it('returns full affiliate detail including phone_number captured at registration', async () => {
+    const response = await request(app.getHttpServer())
+      .get(`/api/v1/admin/affiliates/${pendingAffiliateProfileId}`)
+      .set('Authorization', `Bearer ${superadminToken}`)
+      .expect(200);
+
+    const body = response.body as {
+      data: {
+        profile_id: string;
+        email: string;
+        phone_number: string;
+        commission_balance: string;
+        referred_transactions: unknown[];
+        commission_history: unknown[];
+        withdrawals: unknown[];
+      };
+    };
+    expect(body.data.profile_id).toBe(pendingAffiliateProfileId);
+    expect(body.data.email).toBe('pending1.e2e@example.com');
+    expect(body.data.phone_number).toBe('081234567890');
+    expect(body.data.commission_balance).toBe('0.00');
+    expect(body.data.referred_transactions).toEqual([]);
+    expect(body.data.commission_history).toEqual([]);
+    expect(body.data.withdrawals).toEqual([]);
+  });
+
+  it("manually adjusts an affiliate's commission balance up and back down", async () => {
+    const creditResponse = await request(app.getHttpServer())
+      .patch(
+        `/api/v1/admin/affiliates/${pendingAffiliateProfileId}/commission-balance`,
+      )
+      .set('Authorization', `Bearer ${superadminToken}`)
+      .send({ amount: 50000, reason: 'e2e test credit' })
+      .expect(200);
+    const creditBody = creditResponse.body as {
+      data: { commission_balance: string; total_commission_earned: string };
+    };
+    expect(creditBody.data.commission_balance).toBe('50000.00');
+    expect(creditBody.data.total_commission_earned).toBe('50000.00');
+
+    const debitResponse = await request(app.getHttpServer())
+      .patch(
+        `/api/v1/admin/affiliates/${pendingAffiliateProfileId}/commission-balance`,
+      )
+      .set('Authorization', `Bearer ${superadminToken}`)
+      .send({ amount: -50000, reason: 'e2e test revert' })
+      .expect(200);
+    const debitBody = debitResponse.body as {
+      data: { commission_balance: string; total_commission_earned: string };
+    };
+    expect(debitBody.data.commission_balance).toBe('0.00');
+    // Deducting never reduces the lifetime-earned counter.
+    expect(debitBody.data.total_commission_earned).toBe('50000.00');
+  });
+
+  it('rejects a commission-balance adjustment that would go negative', async () => {
+    await request(app.getHttpServer())
+      .patch(
+        `/api/v1/admin/affiliates/${pendingAffiliateProfileId}/commission-balance`,
+      )
+      .set('Authorization', `Bearer ${superadminToken}`)
+      .send({ amount: -1 })
+      .expect(400);
+  });
+
   it('rejects a pending affiliate', async () => {
     await request(app.getHttpServer())
       .post(
@@ -370,6 +436,7 @@ describe('Admin (e2e)', () => {
         bank_name: 'BCA',
         account_number: '1234567890',
         account_holder: 'Reregistered Affiliate',
+        phone_number: '081234567890',
       })
       .expect(201);
 

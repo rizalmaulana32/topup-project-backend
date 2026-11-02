@@ -36,6 +36,7 @@ import { SettingsService } from '../settings/settings.service';
 import { TopupService } from '../topup/topup.service';
 import { TransactionsService } from '../transactions/transactions.service';
 import { UserRole } from '../users/entities/user.entity';
+import { AdjustCommissionBalanceDto } from './dto/adjust-commission-balance.dto';
 import { CreateProductDto } from './dto/create-product.dto';
 import { ListAffiliatesDto } from './dto/list-affiliates.dto';
 import { ListContactMessagesDto } from './dto/list-contact-messages.dto';
@@ -92,6 +93,7 @@ export class AdminController {
           email: profile.user.email,
           status: profile.user.status,
           affiliate_code: profile.affiliateCode,
+          phone_number: profile.phoneNumber,
           commission_rate: profile.commissionRate,
           commission_balance: profile.commissionBalance,
           created_at: profile.createdAt,
@@ -101,6 +103,21 @@ export class AdminController {
         offset: query.offset ?? 0,
       },
     };
+  }
+
+  @Get('affiliates/:id')
+  @ApiOperation({
+    summary:
+      'Full detail on one affiliate - profile, bank/contact info, commission settings, referred-transaction and commission/withdrawal history',
+  })
+  @ApiParam({
+    name: 'id',
+    description:
+      'The affiliate PROFILE ID (not user_id) - see profile_id in the GET /admin/affiliates response.',
+  })
+  async getAffiliateDetail(@Param('id') id: string) {
+    const data = await this.affiliatesService.getAdminAffiliateDetail(id);
+    return { success: true, data };
   }
 
   @Post('affiliates/:id/approve')
@@ -178,6 +195,35 @@ export class AdminController {
       data: {
         profile_id: profile.id,
         commission_rate: profile.commissionRate,
+      },
+    };
+  }
+
+  @Patch('affiliates/:id/commission-balance')
+  @ApiOperation({
+    summary:
+      "Manually add to or deduct from one affiliate's commission balance - amount is added, pass a negative number to deduct",
+  })
+  @ApiParam({
+    name: 'id',
+    description:
+      'The affiliate PROFILE ID (not user_id) - see profile_id in the GET /admin/affiliates response.',
+  })
+  async adjustAffiliateCommissionBalance(
+    @Param('id') id: string,
+    @Body() dto: AdjustCommissionBalanceDto,
+  ) {
+    const profile = await this.affiliatesService.adjustCommissionBalance(
+      id,
+      dto.amount,
+      dto.reason,
+    );
+    return {
+      success: true,
+      data: {
+        profile_id: profile.id,
+        commission_balance: profile.commissionBalance,
+        total_commission_earned: profile.totalCommissionEarned,
       },
     };
   }

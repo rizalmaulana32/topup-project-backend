@@ -23,4 +23,8 @@ export class RegisterAffiliateDto {
   @IsString()
   @MinLength(1)
   account_holder: string;
+
+  @IsString()
+  @MinLength(1)
+  phone_number: string;
 }

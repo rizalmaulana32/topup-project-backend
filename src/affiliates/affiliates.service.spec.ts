@@ -111,6 +111,7 @@ describe('AffiliatesService', () => {
         bank_name: 'BCA',
         account_number: '1234567890',
         account_holder: 'Ana Affiliate',
+        phone_number: '081234567890',
       });
 
       expect(settingsGetMock).toHaveBeenCalled();

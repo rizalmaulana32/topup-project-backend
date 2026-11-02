@@ -54,6 +54,10 @@ export class AffiliatorProfile {
   @Column({ name: 'account_holder' })
   accountHolder: string;
 
+  /** Nullable at the DB level for pre-existing rows; required on new registrations (client request via Ricky 2026-11-02). */
+  @Column({ name: 'phone_number', type: 'varchar', nullable: true })
+  phoneNumber: string | null;
+
   @Column({
     name: 'commission_balance',
     type: 'decimal',

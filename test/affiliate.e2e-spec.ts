@@ -27,6 +27,7 @@ describe('Affiliate (e2e)', () => {
     bank_name: 'BCA',
     account_number: '1234567890',
     account_holder: 'Ana Affiliate',
+    phone_number: '081234567890',
   };
 
   beforeAll(async () => {

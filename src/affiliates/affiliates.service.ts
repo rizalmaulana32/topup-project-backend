@@ -76,6 +76,7 @@ export class AffiliatesService {
       bankName: dto.bank_name,
       accountNumber: dto.account_number,
       accountHolder: dto.account_holder,
+      phoneNumber: dto.phone_number,
       commissionRate: settings.globalCommissionRate,
     });
     await this.profileRepository.save(profile);
@@ -134,6 +135,69 @@ export class AffiliatesService {
         balance_after: log.balanceAfter,
         description: log.description,
         created_at: log.createdAt,
+      })),
+    };
+  }
+
+  /** Admin-facing full detail view for one affiliate (client request via Ricky 2026-11-02: "penambahan detail informasi affiliate"). */
+  async getAdminAffiliateDetail(profileId: string) {
+    const profile = await this.findProfileByIdOrFail(profileId);
+
+    const referredTransactions = profile.affiliateCode
+      ? await this.transactionsService.findByReferralCode(
+          profile.affiliateCode,
+        )
+      : [];
+
+    const commissionHistory = await this.commissionLogRepository.find({
+      where: { affiliatorId: profile.id },
+      order: { createdAt: 'DESC' },
+    });
+
+    const withdrawals = await this.withdrawalRepository.find({
+      where: { affiliatorId: profile.id },
+      order: { createdAt: 'DESC' },
+    });
+
+    return {
+      profile_id: profile.id,
+      user_id: profile.userId,
+      name: profile.user.name,
+      email: profile.user.email,
+      status: profile.user.status,
+      phone_number: profile.phoneNumber,
+      affiliate_code: profile.affiliateCode,
+      bank_name: profile.bankName,
+      account_number: profile.accountNumber,
+      account_holder: profile.accountHolder,
+      commission_rate: profile.commissionRate,
+      commission_balance: profile.commissionBalance,
+      total_commission_earned: profile.totalCommissionEarned,
+      tiered_commission_enabled: profile.tieredCommissionEnabled,
+      current_period_volume: profile.currentPeriodVolume,
+      current_period_month: profile.currentPeriodMonth,
+      approved_by: profile.approvedBy,
+      approved_at: profile.approvedAt,
+      created_at: profile.createdAt,
+      referred_transaction_count: referredTransactions.length,
+      referred_transactions: referredTransactions.map((transaction) => ({
+        transaction_id: transaction.id,
+        payment_status: transaction.paymentStatus,
+        gross_amount: transaction.grossAmount,
+        created_at: transaction.createdAt,
+      })),
+      commission_history: commissionHistory.map((log) => ({
+        type: log.type,
+        amount: log.amount,
+        balance_after: log.balanceAfter,
+        description: log.description,
+        created_at: log.createdAt,
+      })),
+      withdrawals: withdrawals.map((withdrawal) => ({
+        withdrawal_id: withdrawal.id,
+        amount: withdrawal.amount,
+        status: withdrawal.status,
+        created_at: withdrawal.createdAt,
       })),
     };
   }
@@ -226,6 +290,71 @@ export class AffiliatesService {
     const profile = await this.findProfileByIdOrFail(profileId);
     profile.commissionRate = commissionRate.toFixed(2);
     return this.profileRepository.save(profile);
+  }
+
+  /**
+   * Manual commission-balance adjustment (client request via Ricky
+   * 2026-11-02: "tambahkan manual komisi ke afiliate nominal, bisa
+   * mengurangi atau menambah") - amount is added to commission_balance,
+   * pass a negative number to deduct. Logged as a normal CommissionLog
+   * entry (CREDIT/DEBIT depending on sign) so it shows up in the
+   * affiliate's own commission history exactly like a real transaction
+   * credit, not silently.
+   */
+  async adjustCommissionBalance(
+    profileId: string,
+    amount: number,
+    reason?: string,
+  ): Promise<AffiliatorProfile> {
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+
+    try {
+      const profile = await queryRunner.manager.findOne(AffiliatorProfile, {
+        where: { id: profileId },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!profile) {
+        throw new NotFoundException(`Affiliate profile ${profileId} not found`);
+      }
+
+      const newBalance = Number(profile.commissionBalance) + amount;
+      if (newBalance < 0) {
+        throw new BadRequestException(
+          `Resulting commission balance would be negative (current: ${profile.commissionBalance}, delta: ${amount})`,
+        );
+      }
+      const newTotalEarned =
+        amount > 0
+          ? Number(profile.totalCommissionEarned) + amount
+          : Number(profile.totalCommissionEarned);
+
+      await queryRunner.manager.update(AffiliatorProfile, profile.id, {
+        commissionBalance: newBalance.toFixed(2),
+        totalCommissionEarned: newTotalEarned.toFixed(2),
+      });
+
+      const log = queryRunner.manager.create(CommissionLog, {
+        affiliatorId: profile.id,
+        type: amount >= 0 ? CommissionLogType.CREDIT : CommissionLogType.DEBIT,
+        amount: Math.abs(amount).toFixed(2),
+        balanceAfter: newBalance.toFixed(2),
+        description: reason
+          ? `Manual adjustment by admin: ${reason}`
+          : 'Manual adjustment by admin',
+      });
+      await queryRunner.manager.save(log);
+
+      await queryRunner.commitTransaction();
+    } catch (error) {
+      await queryRunner.rollbackTransaction();
+      throw error;
+    } finally {
+      await queryRunner.release();
+    }
+
+    return this.findProfileByIdOrFail(profileId);
   }
 
   /**
