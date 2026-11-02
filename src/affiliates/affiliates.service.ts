@@ -216,10 +216,21 @@ export class AffiliatesService {
   async approve(
     profileId: string,
     adminUserId: string,
+    customReferralCode?: string,
   ): Promise<AffiliatorProfile> {
     const profile = await this.findProfileByIdOrFail(profileId);
 
-    if (!profile.affiliateCode) {
+    if (customReferralCode) {
+      const existing = await this.profileRepository.findOne({
+        where: { affiliateCode: customReferralCode },
+      });
+      if (existing && existing.id !== profile.id) {
+        throw new ConflictException(
+          `Referral code ${customReferralCode} is already in use`,
+        );
+      }
+      profile.affiliateCode = customReferralCode;
+    } else if (!profile.affiliateCode) {
       profile.affiliateCode = await this.generateUniqueReferralCode();
     }
     profile.approvedBy = adminUserId;
@@ -399,6 +410,7 @@ export class AffiliatesService {
       bankName?: string;
       accountNumber?: string;
       accountHolder?: string;
+      phoneNumber?: string;
     },
   ): Promise<AffiliatorProfile> {
     const profile = await this.profileRepository.findOne({
@@ -416,6 +428,9 @@ export class AffiliatesService {
     }
     if (params.accountHolder !== undefined) {
       profile.accountHolder = params.accountHolder;
+    }
+    if (params.phoneNumber !== undefined) {
+      profile.phoneNumber = params.phoneNumber;
     }
 
     return this.profileRepository.save(profile);

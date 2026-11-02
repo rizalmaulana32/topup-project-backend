@@ -79,6 +79,7 @@ export class AffiliatesController {
         bankName: dto.bank_name,
         accountNumber: dto.account_number,
         accountHolder: dto.account_holder,
+        phoneNumber: dto.phone_number,
       },
     );
     return {
@@ -87,6 +88,7 @@ export class AffiliatesController {
         bank_name: profile.bankName,
         account_number: profile.accountNumber,
         account_holder: profile.accountHolder,
+        phone_number: profile.phoneNumber,
       },
     };
   }

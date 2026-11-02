@@ -37,6 +37,7 @@ import { TopupService } from '../topup/topup.service';
 import { TransactionsService } from '../transactions/transactions.service';
 import { UserRole } from '../users/entities/user.entity';
 import { AdjustCommissionBalanceDto } from './dto/adjust-commission-balance.dto';
+import { ApproveAffiliateDto } from './dto/approve-affiliate.dto';
 import { CreateProductDto } from './dto/create-product.dto';
 import { ListAffiliatesDto } from './dto/list-affiliates.dto';
 import { ListContactMessagesDto } from './dto/list-contact-messages.dto';
@@ -123,7 +124,7 @@ export class AdminController {
   @Post('affiliates/:id/approve')
   @ApiOperation({
     summary:
-      'Approve an affiliate and generate their referral code. Also usable to REACTIVATE a previously-rejected affiliate (keeps the same referral code, does not generate a new one).',
+      "Approve an affiliate and generate their referral code - optionally pass referral_code to use a custom one instead of auto-generating (must be unique). Also usable to REACTIVATE a previously-rejected affiliate (keeps the affiliate's existing code unless referral_code overrides it).",
   })
   @ApiParam({
     name: 'id',
@@ -132,9 +133,14 @@ export class AdminController {
   })
   async approveAffiliate(
     @Param('id') id: string,
+    @Body() dto: ApproveAffiliateDto,
     @Req() request: Request & { user: AuthenticatedUser },
   ) {
-    const profile = await this.affiliatesService.approve(id, request.user.id);
+    const profile = await this.affiliatesService.approve(
+      id,
+      request.user.id,
+      dto.referral_code,
+    );
     return {
       success: true,
       data: {

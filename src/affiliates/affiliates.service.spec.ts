@@ -233,6 +233,42 @@ describe('AffiliatesService', () => {
       expect(result.affiliateCode).toBe('AFF-EXISTING');
     });
 
+    it('uses a custom referral code instead of auto-generating one', async () => {
+      const pendingProfile = {
+        id: '1',
+        userId: '1',
+        affiliateCode: null,
+        user: { status: UserStatus.PENDING_APPROVAL },
+      };
+      const approvedProfile = { ...pendingProfile, affiliateCode: 'YAY-CUSTOM' };
+      profileFindOneMock
+        .mockResolvedValueOnce(pendingProfile) // findProfileByIdOrFail
+        .mockResolvedValueOnce(null) // custom-code uniqueness check: free
+        .mockResolvedValueOnce(approvedProfile); // findProfileByIdOrFail (return value)
+      profileSaveMock.mockResolvedValue(undefined);
+
+      const result = await service.approve('1', 'admin-1', 'YAY-CUSTOM');
+
+      expect(result.affiliateCode).toBe('YAY-CUSTOM');
+    });
+
+    it('rejects a custom referral code already used by another affiliate', async () => {
+      const pendingProfile = {
+        id: '1',
+        userId: '1',
+        affiliateCode: null,
+        user: { status: UserStatus.PENDING_APPROVAL },
+      };
+      profileFindOneMock
+        .mockResolvedValueOnce(pendingProfile) // findProfileByIdOrFail
+        .mockResolvedValueOnce({ id: '2', affiliateCode: 'YAY-CUSTOM' }); // taken by someone else
+
+      await expect(
+        service.approve('1', 'admin-1', 'YAY-CUSTOM'),
+      ).rejects.toBeInstanceOf(ConflictException);
+      expect(profileSaveMock).not.toHaveBeenCalled();
+    });
+
     it('throws NotFoundException for an unknown profile', async () => {
       profileFindOneMock.mockResolvedValue(null);
 

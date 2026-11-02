@@ -207,6 +207,7 @@ describe('Affiliate (e2e)', () => {
         bank_name: string;
         account_number: string;
         account_holder: string;
+        phone_number: string | null;
       };
     };
     expect(updateBody.success).toBe(true);
@@ -214,7 +215,23 @@ describe('Affiliate (e2e)', () => {
       bank_name: 'BNI',
       account_number: '9988776655',
       account_holder: 'Ana Affiliate Updated',
+      // Unchanged - this request didn't touch phone_number.
+      phone_number: registrationPayload.phone_number,
     });
+
+    // Self-service: an affiliate who registered before phone_number existed
+    // (or just wants to change it) can add/update it on its own, without
+    // touching bank details.
+    const phoneOnlyResponse = await request(app.getHttpServer())
+      .patch('/api/v1/affiliate/bank-details')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ phone_number: '089900011122' })
+      .expect(200);
+    const phoneOnlyBody = phoneOnlyResponse.body as {
+      data: { bank_name: string; phone_number: string };
+    };
+    expect(phoneOnlyBody.data.phone_number).toBe('089900011122');
+    expect(phoneOnlyBody.data.bank_name).toBe('BNI');
 
     const dashboardResponse = await request(app.getHttpServer())
       .get('/api/v1/affiliate/dashboard')

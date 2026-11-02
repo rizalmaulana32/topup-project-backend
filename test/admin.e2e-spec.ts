@@ -239,6 +239,29 @@ describe('Admin (e2e)', () => {
     expect(user.status).toBe(UserStatus.ACTIVE);
   });
 
+  it('approves an affiliate with a custom referral code instead of auto-generating one', async () => {
+    const profileId = await registerPendingAffiliate('custom-code.e2e@example.com');
+
+    const response = await request(app.getHttpServer())
+      .post(`/api/v1/admin/affiliates/${profileId}/approve`)
+      .set('Authorization', `Bearer ${superadminToken}`)
+      .send({ referral_code: 'YAY-CUSTOM1' })
+      .expect(201);
+
+    const body = response.body as { data: { affiliate_code: string } };
+    expect(body.data.affiliate_code).toBe('YAY-CUSTOM1');
+  });
+
+  it('rejects approving with a referral code already used by another affiliate', async () => {
+    const profileId = await registerPendingAffiliate('custom-code-2.e2e@example.com');
+
+    await request(app.getHttpServer())
+      .post(`/api/v1/admin/affiliates/${profileId}/approve`)
+      .set('Authorization', `Bearer ${superadminToken}`)
+      .send({ referral_code: 'YAY-CUSTOM1' })
+      .expect(409);
+  });
+
   it('returns full affiliate detail including phone_number captured at registration', async () => {
     const response = await request(app.getHttpServer())
       .get(`/api/v1/admin/affiliates/${pendingAffiliateProfileId}`)

@@ -15,4 +15,9 @@ export class UpdateBankDetailsDto {
   @IsString()
   @IsNotEmpty()
   account_holder?: string;
+
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  phone_number?: string;
 }
