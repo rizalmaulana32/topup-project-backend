@@ -147,6 +147,7 @@ describe('Affiliate (e2e)', () => {
       success: boolean;
       data: {
         affiliate_code: string;
+        phone_number: string;
         commission_balance: string;
         referred_transaction_count: number;
         commission_history: unknown[];
@@ -154,6 +155,9 @@ describe('Affiliate (e2e)', () => {
     };
     expect(dashboardBody.success).toBe(true);
     expect(dashboardBody.data.affiliate_code).toBe(referralCode);
+    expect(dashboardBody.data.phone_number).toBe(
+      registrationPayload.phone_number,
+    );
     expect(dashboardBody.data.commission_balance).toBe('0.00');
     expect(dashboardBody.data.referred_transaction_count).toBe(0);
     expect(dashboardBody.data.commission_history).toEqual([]);

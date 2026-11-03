@@ -120,6 +120,7 @@ export class AffiliatesService {
       bank_name: profile.bankName,
       account_number: profile.accountNumber,
       account_holder: profile.accountHolder,
+      phone_number: profile.phoneNumber,
       commission_balance: profile.commissionBalance,
       total_commission_earned: profile.totalCommissionEarned,
       referred_transaction_count: referredTransactions.length,
