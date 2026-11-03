@@ -586,6 +586,56 @@ describe('Admin (e2e)', () => {
     expect(body.data.limit).toBe(5);
   });
 
+  it('filters transactions by referral code and amount range', async () => {
+    await transactionRepository.save([
+      transactionRepository.create({
+        id: 'TRX-FILTER-TEST-1',
+        targetUserId: '11111111',
+        grossAmount: '10000.00',
+        referralCode: 'FILTERCODE',
+        paymentStatus: PaymentStatus.PENDING,
+        providerStatus: ProviderStatus.PENDING,
+      }),
+      transactionRepository.create({
+        id: 'TRX-FILTER-TEST-2',
+        targetUserId: '22222222',
+        grossAmount: '500000.00',
+        referralCode: 'FILTERCODE',
+        paymentStatus: PaymentStatus.PENDING,
+        providerStatus: ProviderStatus.PENDING,
+      }),
+      transactionRepository.create({
+        id: 'TRX-FILTER-TEST-3',
+        targetUserId: '33333333',
+        grossAmount: '10000.00',
+        referralCode: 'OTHERCODE',
+        paymentStatus: PaymentStatus.PENDING,
+        providerStatus: ProviderStatus.PENDING,
+      }),
+    ]);
+
+    const response = await request(app.getHttpServer())
+      .get(
+        '/api/v1/admin/transactions?referral_code=FILTERCODE&amount_min=5000&amount_max=20000',
+      )
+      .set('Authorization', `Bearer ${superadminToken}`)
+      .expect(200);
+
+    const body = response.body as {
+      data: { items: { id: string }[] };
+    };
+    const ids = body.data.items.map((item) => item.id);
+    expect(ids).toContain('TRX-FILTER-TEST-1');
+    expect(ids).not.toContain('TRX-FILTER-TEST-2');
+    expect(ids).not.toContain('TRX-FILTER-TEST-3');
+
+    await transactionRepository.delete([
+      'TRX-FILTER-TEST-1',
+      'TRX-FILTER-TEST-2',
+      'TRX-FILTER-TEST-3',
+    ]);
+  });
+
   it('totals paid transactions - gross-only and including the real LinkQu fee (2026-10-10 client request)', async () => {
     await transactionRepository.save([
       transactionRepository.create({

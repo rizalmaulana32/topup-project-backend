@@ -511,6 +511,12 @@ export class AdminController {
   async listTransactions(@Query() query: ListTransactionsDto) {
     const result = await this.transactionsService.findAll({
       status: query.status,
+      dateFrom: query.date_from,
+      dateTo: query.date_to,
+      productId: query.product_id,
+      referralCode: query.referral_code,
+      amountMin: query.amount_min,
+      amountMax: query.amount_max,
       limit: query.limit ?? 20,
       offset: query.offset ?? 0,
     });

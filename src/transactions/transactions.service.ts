@@ -104,18 +104,61 @@ export class TransactionsService {
 
   async findAll(params: {
     status?: PaymentStatus;
+    dateFrom?: string;
+    dateTo?: string;
+    productId?: string;
+    referralCode?: string;
+    amountMin?: number;
+    amountMax?: number;
     limit: number;
     offset: number;
   }): Promise<{
     items: Transaction[];
     total: number;
   }> {
-    const [items, total] = await this.transactionRepository.findAndCount({
-      where: params.status ? { paymentStatus: params.status } : {},
-      order: { createdAt: 'DESC' },
-      take: params.limit,
-      skip: params.offset,
-    });
+    const query = this.transactionRepository
+      .createQueryBuilder('t')
+      .leftJoinAndSelect('t.product', 'product')
+      .orderBy('t.created_at', 'DESC')
+      .take(params.limit)
+      .skip(params.offset);
+
+    if (params.status) {
+      query.andWhere('t.payment_status = :status', { status: params.status });
+    }
+    if (params.dateFrom) {
+      query.andWhere('t.created_at >= :dateFrom', {
+        dateFrom: params.dateFrom,
+      });
+    }
+    if (params.dateTo) {
+      // Inclusive of the whole end day - date_to is a calendar date, not a timestamp.
+      query.andWhere('t.created_at < (:dateTo::date + interval \'1 day\')', {
+        dateTo: params.dateTo,
+      });
+    }
+    if (params.productId) {
+      query.andWhere('t.product_id = :productId', {
+        productId: params.productId,
+      });
+    }
+    if (params.referralCode) {
+      query.andWhere('t.referral_code = :referralCode', {
+        referralCode: params.referralCode,
+      });
+    }
+    if (params.amountMin !== undefined) {
+      query.andWhere('t.gross_amount >= :amountMin', {
+        amountMin: params.amountMin,
+      });
+    }
+    if (params.amountMax !== undefined) {
+      query.andWhere('t.gross_amount <= :amountMax', {
+        amountMax: params.amountMax,
+      });
+    }
+
+    const [items, total] = await query.getManyAndCount();
     return { items, total };
   }
 

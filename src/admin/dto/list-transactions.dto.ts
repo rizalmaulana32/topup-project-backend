@@ -1,5 +1,14 @@
 import { Transform, Type } from 'class-transformer';
-import { IsEnum, IsInt, IsOptional, Max, Min } from 'class-validator';
+import {
+  IsDateString,
+  IsEnum,
+  IsInt,
+  IsNumber,
+  IsOptional,
+  IsString,
+  Max,
+  Min,
+} from 'class-validator';
 import { PaymentStatus } from '../../transactions/entities/transaction.entity';
 
 // "sukses"/"success" accepted as aliases for "paid" - the stored status
@@ -19,6 +28,40 @@ export class ListTransactionsDto {
   )
   @IsEnum(PaymentStatus)
   status?: PaymentStatus;
+
+  // "Dari Tanggal" - inclusive start of the created_at range, e.g. 2026-11-01.
+  @IsOptional()
+  @IsDateString()
+  date_from?: string;
+
+  // "Sampai Tanggal" - inclusive end of the created_at range.
+  @IsOptional()
+  @IsDateString()
+  date_to?: string;
+
+  // "Produk" filter in the admin UI.
+  @IsOptional()
+  @IsString()
+  product_id?: string;
+
+  // "Referral Code" filter in the admin UI.
+  @IsOptional()
+  @IsString()
+  referral_code?: string;
+
+  // "Jumlah Min (Rp)" - inclusive lower bound on gross_amount.
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0)
+  amount_min?: number;
+
+  // "Jumlah Max (Rp)" - inclusive upper bound on gross_amount.
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0)
+  amount_max?: number;
 
   @IsOptional()
   @Type(() => Number)
