@@ -337,4 +337,58 @@ describe('Manual top-up (e2e)', () => {
       .set('Authorization', `Bearer ${superadminToken}`)
       .expect(409);
   });
+
+  it('manually pauses an active schedule and resumes it', async () => {
+    const createResponse = await request(app.getHttpServer())
+      .post('/api/v1/admin/manual-topups')
+      .set('Authorization', `Bearer ${superadminToken}`)
+      .send({
+        momo_user_id: '99990001',
+        total_amount: 1000,
+        amount_per_send: 100,
+        interval_minutes: 10,
+      })
+      .expect(201);
+    const createBody = createResponse.body as { data: { id: string } };
+
+    const pauseResponse = await request(app.getHttpServer())
+      .post(`/api/v1/admin/manual-topups/${createBody.data.id}/pause`)
+      .set('Authorization', `Bearer ${superadminToken}`)
+      .expect(201);
+    const pauseBody = pauseResponse.body as {
+      data: { status: string; next_run_at: string | null };
+    };
+    expect(pauseBody.data.status).toBe('paused');
+    expect(pauseBody.data.next_run_at).toBeNull();
+
+    // Pausing again while already paused is rejected.
+    await request(app.getHttpServer())
+      .post(`/api/v1/admin/manual-topups/${createBody.data.id}/pause`)
+      .set('Authorization', `Bearer ${superadminToken}`)
+      .expect(409);
+
+    const resumeResponse = await request(app.getHttpServer())
+      .post(`/api/v1/admin/manual-topups/${createBody.data.id}/resume`)
+      .set('Authorization', `Bearer ${superadminToken}`)
+      .expect(201);
+    const resumeBody = resumeResponse.body as { data: { status: string } };
+    expect(resumeBody.data.status).toBe('active');
+  });
+
+  it('rejects pausing a completed schedule', async () => {
+    const createResponse = await request(app.getHttpServer())
+      .post('/api/v1/admin/manual-topups')
+      .set('Authorization', `Bearer ${superadminToken}`)
+      .send({ momo_user_id: '99990002', total_amount: 100 })
+      .expect(201);
+    const createBody = createResponse.body as {
+      data: { id: string; status: string };
+    };
+    expect(createBody.data.status).toBe('completed');
+
+    await request(app.getHttpServer())
+      .post(`/api/v1/admin/manual-topups/${createBody.data.id}/pause`)
+      .set('Authorization', `Bearer ${superadminToken}`)
+      .expect(409);
+  });
 });

@@ -168,10 +168,20 @@ export class ManualTopupController {
     return { success: true, data: toManualTopupResponse(manualTopup) };
   }
 
+  @Post('manual-topups/:id/pause')
+  @ApiOperation({
+    summary:
+      'Manually pause an active manual top-up schedule (stops the scheduler from sending further installments until resumed)',
+  })
+  async pauseManualTopup(@Param('id') id: string) {
+    const manualTopup = await this.manualTopupService.pause(id);
+    return { success: true, data: toManualTopupResponse(manualTopup) };
+  }
+
   @Post('manual-topups/:id/resume')
   @ApiOperation({
     summary:
-      "Resume a schedule that was auto-paused for insufficient coin limit - call after topping up the creator's budget",
+      'Resume a paused schedule - whether it was paused manually or auto-paused for insufficient coin limit (top up the budget first in that case)',
   })
   async resumeManualTopup(@Param('id') id: string) {
     const manualTopup = await this.manualTopupService.resume(id);

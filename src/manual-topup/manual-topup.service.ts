@@ -225,7 +225,23 @@ export class ManualTopupService {
     return this.findByIdOrFail(id);
   }
 
-  /** Resumes a PAUSED schedule (after the superadmin has topped up the creator's coin_limit). */
+  /** Manually pauses an ACTIVE schedule - distinct from the automatic pause on insufficient coin limit, but resumed the same way (resume()). */
+  async pause(id: string): Promise<ManualTopup> {
+    const manualTopup = await this.findByIdOrFail(id);
+    if (manualTopup.status !== ManualTopupStatus.ACTIVE) {
+      throw new ConflictException(
+        `Manual top-up ${id} is not active (current status: ${manualTopup.status})`,
+      );
+    }
+
+    await this.manualTopupRepository.update(id, {
+      status: ManualTopupStatus.PAUSED,
+      nextRunAt: null,
+    });
+    return this.findByIdOrFail(id);
+  }
+
+  /** Resumes a PAUSED schedule - whether paused manually via pause() or automatically for insufficient coin limit (top up the creator's coin_limit first in that case). */
   async resume(id: string): Promise<ManualTopup> {
     const manualTopup = await this.findByIdOrFail(id);
     if (manualTopup.status !== ManualTopupStatus.PAUSED) {
