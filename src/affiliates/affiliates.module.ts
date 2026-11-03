@@ -3,6 +3,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { AuthModule } from '../auth/auth.module';
 import { LinkQuModule } from '../linkqu/linkqu.module';
 import { PlatformModule } from '../platform/platform.module';
+import { ProviderModule } from '../provider/provider.module';
 import { SettingsModule } from '../settings/settings.module';
 import { TransactionsModule } from '../transactions/transactions.module';
 import { UsersModule } from '../users/users.module';
@@ -26,6 +27,7 @@ import { LinkQuDisbursementWebhookController } from './webhook/linkqu-disburseme
     SettingsModule,
     LinkQuModule,
     PlatformModule,
+    ProviderModule,
   ],
   controllers: [AffiliatesController, LinkQuDisbursementWebhookController],
   providers: [AffiliatesService],

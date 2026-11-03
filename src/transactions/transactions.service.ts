@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { IsNull, Not, Repository } from 'typeorm';
+import { In, IsNull, Not, Repository } from 'typeorm';
 import { generateOrderId } from '../common/utils/id-generator.util';
 import { Product } from '../products/entities/product.entity';
 import {
@@ -93,6 +93,11 @@ export class TransactionsService {
     return this.transactionRepository.findOne({
       where: { id: externalId },
     });
+  }
+
+  async findByIds(ids: string[]): Promise<Transaction[]> {
+    if (ids.length === 0) return [];
+    return this.transactionRepository.find({ where: { id: In(ids) } });
   }
 
   async findByReferralCode(referralCode: string): Promise<Transaction[]> {

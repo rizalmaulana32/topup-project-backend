@@ -5,6 +5,7 @@ import { UsersModule } from '../users/users.module';
 import { AdminProfile } from './entities/admin-profile.entity';
 import { ManualTopup } from './entities/manual-topup.entity';
 import { ManualTopupSend } from './entities/manual-topup-send.entity';
+import { AdminPanelController } from './admin-panel.controller';
 import { ManualTopupController } from './manual-topup.controller';
 import { ManualTopupService } from './manual-topup.service';
 
@@ -14,7 +15,7 @@ import { ManualTopupService } from './manual-topup.service';
     ProviderModule,
     UsersModule,
   ],
-  controllers: [ManualTopupController],
+  controllers: [ManualTopupController, AdminPanelController],
   providers: [ManualTopupService],
   exports: [ManualTopupService],
 })

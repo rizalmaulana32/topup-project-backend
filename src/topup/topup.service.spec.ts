@@ -42,7 +42,10 @@ describe('TopupService', () => {
   let creditCommissionMock: jest.Mock;
   let checkCodeValidityMock: jest.Mock;
   let affiliatesService: jest.Mocked<
-    Pick<AffiliatesService, 'creditCommissionForTransaction' | 'checkCodeValidity'>
+    Pick<
+      AffiliatesService,
+      'creditCommissionForTransaction' | 'checkCodeValidity'
+    >
   >;
   let creditRevenueMock: jest.Mock;
   let platformService: jest.Mocked<
@@ -104,7 +107,10 @@ describe('TopupService', () => {
     settingsService = {
       get: jest
         .fn()
-        .mockResolvedValue({ customAmountMarginRate: '0', customerDiscountRate: '0' }),
+        .mockResolvedValue({
+          customAmountMarginRate: '0',
+          customerDiscountRate: '0',
+        }),
     };
 
     service = new TopupService(
@@ -371,8 +377,9 @@ describe('TopupService', () => {
 
       expect(result).toEqual({
         amount: 500000,
-        coin_amount: 505000,
+        coin_amount: 508500,
         bonus_coin: 5000,
+        extra_coin: 3500,
       });
     });
 
@@ -380,11 +387,12 @@ describe('TopupService', () => {
       const result = await service.estimateCustomAmount({ coin: 370000 });
 
       // 370000 is itself the nominal (coin and rupiah are the same input
-      // by design) - it qualifies for the 350k tier -> +3500 bonus on top.
+      // by design) - it qualifies for the 350k tier -> +3500 bonus, +2590 (0.7%) extra.
       expect(result).toEqual({
         amount: 370000,
-        coin_amount: 373500,
+        coin_amount: 376090,
         bonus_coin: 3500,
+        extra_coin: 2590,
       });
     });
 
@@ -395,11 +403,12 @@ describe('TopupService', () => {
 
       const result = await service.estimateCustomAmount({ amount: 25000 });
 
-      // full value = 25000 (no bonus); 10% cut -> floor(25000*0.9) = 22500
+      // full value = 25000 + 175 extra (no bonus); 10% cut -> floor(25175*0.9) = 22657
       expect(result).toEqual({
         amount: 25000,
-        coin_amount: 22500,
+        coin_amount: 22657,
         bonus_coin: 0,
+        extra_coin: 175,
       });
     });
 
@@ -438,8 +447,8 @@ describe('TopupService', () => {
         transactionsService.createPendingCustomAmount,
       ).toHaveBeenCalledWith({
         grossAmount: '25000',
-        coinAmount: '25000',
-        costBasis: '25000',
+        coinAmount: '25175',
+        costBasis: '25175',
         targetUserId: '1',
         targetZoneId: '99',
         referralCode: 'AFF123',
@@ -447,12 +456,13 @@ describe('TopupService', () => {
       expect(linkQuService.createInvoice).toHaveBeenCalledWith({
         externalId: 'TRX-20260805-0020',
         amount: 25000,
-        description: 'Top-up 25000 coin for 1',
+        description: 'Top-up 25175 coin for 1',
       });
       expect(result).toEqual({
         transaction_id: 'TRX-20260805-0020',
-        coin_amount: 25000,
+        coin_amount: 25175,
         bonus_coin: 0,
+        extra_coin: 175,
         linkqu_reference: '800',
         invoice_url: 'https://cognos.linkqu.id/pay/custom-amount-test',
       });
@@ -477,7 +487,7 @@ describe('TopupService', () => {
       expect(
         transactionsService.createPendingCustomAmount,
       ).toHaveBeenCalledWith(
-        expect.objectContaining({ coinAmount: '505000', costBasis: '505000' }),
+        expect.objectContaining({ coinAmount: '508500', costBasis: '508500' }),
       );
     });
 
@@ -499,11 +509,11 @@ describe('TopupService', () => {
         target_user_id: '1',
       });
 
-      // full value = 10000 (no bonus); 20% cut -> floor(10000*0.8) = 8000
+      // full value = 10000 + 70 extra (no bonus); 20% cut -> floor(10070*0.8) = 8056
       expect(
         transactionsService.createPendingCustomAmount,
       ).toHaveBeenCalledWith(
-        expect.objectContaining({ coinAmount: '8000', costBasis: '8000' }),
+        expect.objectContaining({ coinAmount: '8056', costBasis: '8056' }),
       );
     });
   });

@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Delete,
@@ -21,7 +22,11 @@ import {
   ApiTags,
 } from '@nestjs/swagger';
 import { Request } from 'express';
-import { AffiliatesService } from '../affiliates/affiliates.service';
+import {
+  AffiliatesService,
+  toLinkedAdmin,
+} from '../affiliates/affiliates.service';
+import { WithdrawalMethod } from '../affiliates/entities/commission-withdrawal.entity';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { Roles } from '../auth/roles.decorator';
 import { RolesGuard } from '../auth/roles.guard';
@@ -77,14 +82,26 @@ export class AdminController {
   ) {}
 
   @Get('affiliates')
-  @ApiOperation({ summary: 'List affiliate registrations' })
+  @ApiOperation({
+    summary:
+      'List affiliate registrations. Each item has period_stats - paid referred transactions, their gross amount and commission credited within date_from..date_to (YYYY-MM-DD, inclusive; e.g. periode 1 = 01-15, periode 2 = 16-end of month). Without dates, period_stats covers all time. With date_from and/or date_to, commission_balance is the commission earned in that range; the actual balance is always in current_commission_balance.',
+  })
   async listAffiliates(@Query() query: ListAffiliatesDto) {
+    if (query.date_from && query.date_to && query.date_from > query.date_to) {
+      throw new BadRequestException('date_from must not be after date_to');
+    }
     const result = await this.affiliatesService.findAllProfiles({
       status: query.status,
+      adminProfileId: query.admin_profile_id,
       search: query.search,
       limit: query.limit ?? 20,
       offset: query.offset ?? 0,
     });
+    const hasPeriod = Boolean(query.date_from || query.date_to);
+    const periodStats = await this.affiliatesService.getPeriodStats(
+      result.items.map((profile) => profile.id),
+      { dateFrom: query.date_from, dateTo: query.date_to },
+    );
     return {
       success: true,
       data: {
@@ -95,11 +112,28 @@ export class AdminController {
           email: profile.user.email,
           status: profile.user.status,
           affiliate_code: profile.affiliateCode,
+          admin: toLinkedAdmin(profile.adminProfile),
           phone_number: profile.phoneNumber,
           commission_rate: profile.commissionRate,
-          commission_balance: profile.commissionBalance,
+          // With a date range, commission_balance is the commission earned from
+          // that range's transactions (client request); the real balance stays
+          // available as current_commission_balance.
+          commission_balance: hasPeriod
+            ? (periodStats.get(profile.id)?.commission ?? '0.00')
+            : profile.commissionBalance,
+          current_commission_balance: profile.commissionBalance,
+          period_stats: {
+            transaction_count:
+              periodStats.get(profile.id)?.transactionCount ?? 0,
+            gross_amount: periodStats.get(profile.id)?.grossAmount ?? '0.00',
+            commission: periodStats.get(profile.id)?.commission ?? '0.00',
+          },
           created_at: profile.createdAt,
         })),
+        period: {
+          date_from: query.date_from ?? null,
+          date_to: query.date_to ?? null,
+        },
         total: result.total,
         limit: query.limit ?? 20,
         offset: query.offset ?? 0,
@@ -417,6 +451,7 @@ export class AdminController {
   async listWithdrawals(@Query() query: ListWithdrawalsDto) {
     const result = await this.affiliatesService.findAllWithdrawals({
       status: query.status,
+      method: query.method,
       search: query.search,
       limit: query.limit ?? 20,
       offset: query.offset ?? 0,
@@ -432,6 +467,12 @@ export class AdminController {
           amount: withdrawal.amount,
           admin_fee: withdrawal.adminFee,
           net_amount: withdrawal.netAmount,
+          method: withdrawal.method,
+          momo_user_id: withdrawal.momoUserId,
+          coin_amount:
+            withdrawal.method === WithdrawalMethod.MOMO_COIN
+              ? withdrawal.netAmount
+              : null,
           bank_name: withdrawal.bankName,
           account_number: withdrawal.accountNumber,
           account_holder: withdrawal.accountHolder,
@@ -453,7 +494,7 @@ export class AdminController {
   @Post('withdrawals/:id/approve')
   @ApiOperation({
     summary:
-      'Approve a withdrawal request — the actual transfer is done manually outside the system; use /process afterward to mark it paid',
+      'Approve a withdrawal request. bank: the actual transfer is done manually outside the system; use /process afterward to mark it paid. momo_coin: coins are sent immediately and the withdrawal becomes paid (stays pending if the send fails).',
   })
   async approveWithdrawal(
     @Param('id') id: string,
@@ -467,9 +508,11 @@ export class AdminController {
       success: true,
       data: {
         withdrawal_id: withdrawal.id,
+        method: withdrawal.method,
         status: withdrawal.status,
         approved_by: withdrawal.approvedBy,
         approved_at: withdrawal.approvedAt,
+        processed_at: withdrawal.processedAt,
       },
     };
   }

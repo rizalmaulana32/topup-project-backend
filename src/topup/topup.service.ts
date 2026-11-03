@@ -141,9 +141,7 @@ export class TopupService {
           const discount =
             Math.round(Number(product.sellingPrice) * discountRate) / 100;
           customerDiscountAmount = discount.toFixed(2);
-          chargedAmount = (Number(product.sellingPrice) - discount).toFixed(
-            2,
-          );
+          chargedAmount = (Number(product.sellingPrice) - discount).toFixed(2);
         }
       }
     }
@@ -201,6 +199,7 @@ export class TopupService {
       amount,
       coin_amount: pricing.coinAmount,
       bonus_coin: pricing.bonusCoin,
+      extra_coin: pricing.extraCoin,
     };
   }
 
@@ -211,10 +210,11 @@ export class TopupService {
    */
   async checkoutCustomAmount(dto: CheckoutCustomAmountDto) {
     const settings = await this.settingsService.get();
-    const { coinAmount, bonusCoin, costBasis } = calculateCustomAmountPricing(
-      dto.amount,
-      Number(settings.customAmountMarginRate),
-    );
+    const { coinAmount, bonusCoin, extraCoin, costBasis } =
+      calculateCustomAmountPricing(
+        dto.amount,
+        Number(settings.customAmountMarginRate),
+      );
 
     if (coinAmount <= 0) {
       throw new BadRequestException(
@@ -247,6 +247,7 @@ export class TopupService {
       transaction_id: transaction.id,
       coin_amount: coinAmount,
       bonus_coin: bonusCoin,
+      extra_coin: extraCoin,
       linkqu_reference: invoice.invoiceId,
       invoice_url: invoice.invoiceUrl,
     };

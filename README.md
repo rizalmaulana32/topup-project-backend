@@ -99,10 +99,10 @@ Everything below is prefixed with `/api/v1`. Auth-protected routes need `Authori
 
 | Method | Path | Auth | What it does |
 |---|---|---|---|
-| `POST` | `/affiliate/register` | none | Sign up as an affiliate. Body: `{ name, email, password, bank_name, account_number, account_holder }`. Status starts as `pending_approval` until a superadmin approves it. |
+| `POST` | `/affiliate/register` | none | Sign up as an affiliate. Body: `{ name, email, password, bank_name, account_number, account_holder, phone_number, referral_code? }`. `referral_code` is an admin's code (from `/admin/manual-admins`) and links the new affiliate to that admin; an unknown or deleted admin's code is rejected with 400. Status starts as `pending_approval` until a superadmin approves it. |
 | `GET` | `/affiliate/dashboard` | affiliate | Referral stats, commission balance, commission history, and current bank details |
 | `PATCH` | `/affiliate/bank-details` | affiliate | Add or update your own payout bank details. Body: `{ bank_name?, account_number?, account_holder? }` — partial update, own profile only |
-| `POST` | `/affiliate/withdraw` | affiliate | Request a payout. Body: `{ amount }`. Only works once balance ≥ the minimum withdrawal amount. |
+| `POST` | `/affiliate/withdraw` | affiliate | Request a payout. Body: `{ amount, method?, momo_user_id? }`. `method` is `bank` (default, manual transfer to the bank account on file) or `momo_coin` (coins sent to `momo_user_id` on approval, 1 coin = Rp1 of `net_amount`; the Momo ID is checked with MomoLive at request time). Only works once balance ≥ the minimum withdrawal amount. |
 
 ### Superadmin
 
@@ -110,7 +110,7 @@ Everything here needs a superadmin JWT. There's no self-registration for admins 
 
 | Method | Path | What it does |
 |---|---|---|
-| `GET` | `/admin/affiliates` | List affiliate registrations. Filter with `?status=pending_approval\|active\|inactive`, paginate with `?limit=&offset=` |
+| `GET` | `/admin/affiliates` | List affiliate registrations. Filter with `?status=pending_approval\|active\|inactive`, `?admin_profile_id=`, paginate with `?limit=&offset=`. Each item has `period_stats` (`transaction_count`, `gross_amount`, `commission`) — paid referred transactions within `?date_from=&date_to=` (YYYY-MM-DD, both inclusive; periode 1 = 1–15, periode 2 = 16–end of month), counted by when the commission was credited and including sales under an older referral code. Without dates it covers all time. When `date_from` and/or `date_to` is given, `commission_balance` is the commission earned in that range instead of the live balance; the live balance is always in `current_commission_balance`. |
 | `POST` | `/admin/affiliates/:id/approve` | Approve an affiliate — activates them and generates their referral code |
 | `POST` | `/admin/affiliates/:id/reject` | Reject an affiliate |
 | `PATCH` | `/admin/affiliates/:id/commission-rate` | Override one affiliate's commission rate. Body: `{ commission_rate }` |
@@ -120,8 +120,8 @@ Everything here needs a superadmin JWT. There's no self-registration for admins 
 | `POST` | `/admin/products` | Add a product. Body: `{ name, provider_code, base_price, selling_price, coin_amount, bonus_coin?, flag? }` |
 | `PATCH` | `/admin/products/:id` | Edit a product (price, coin amount, bonus, flag, status, etc.) |
 | `DELETE` | `/admin/products/:id` | Soft-delete a product — hidden from every listing, row stays in the database so past transactions still resolve |
-| `GET` | `/admin/withdrawals` | List withdrawal requests. Filter with `?status=pending\|approved\|rejected\|paid\|failed` (`success` is accepted as an alias for `paid`) |
-| `POST` | `/admin/withdrawals/:id/approve` | Approve a withdrawal — this triggers a real Duitku disbursement call |
+| `GET` | `/admin/withdrawals` | List withdrawal requests. Filter with `?status=pending\|approved\|rejected\|paid\|failed` (`success` is accepted as an alias for `paid`) and `?method=bank\|momo_coin`. Each item has `method`, `momo_user_id` and `coin_amount` (coin withdrawals only; bank fields are null for those) |
+| `POST` | `/admin/withdrawals/:id/approve` | Approve a withdrawal. `bank`: sign-off only, transfer manually then call `/process`. `momo_coin`: sends the coins right away and marks it `paid`; if the send fails it stays `pending` (502) so you can retry or reject |
 | `POST` | `/admin/withdrawals/:id/reject` | Decline a withdrawal before it's sent to Duitku (bad bank details, fraud, etc.) — refunds the locked balance |
 | `GET` | `/admin/transactions` | Monitor all transactions, paginated |
 | `GET` | `/admin/provider/balance` | Check the merchant's remaining coin balance with the Provider Top-Up vendor (MomoLive) |
@@ -135,6 +135,19 @@ Everything here needs a superadmin JWT. There's no self-registration for admins 
 | `GET` | `/admin/contact-messages` | List contact form submissions. Filter with `?status=open\|resolved` |
 | `POST` | `/admin/contact-messages/:id/resolve` | Mark a submission resolved |
 | `DELETE` | `/admin/contact-messages/:id` | Soft-delete a submission — hidden from listings, row stays in the database |
+
+### Admin panel (role `admin` only)
+
+For manual coin-sender accounts created by a superadmin via `POST /admin/manual-admins`. Everything is scoped to the logged-in admin from the access token — no admin id in any URL. A superadmin token gets `403` here; the superadmin equivalents are under `/admin`.
+
+| Method | Path | What it does |
+|---|---|---|
+| `GET` | `/admin-panel/me` | Own profile, `referral_code`, `coin_limit` (remaining coin that can be sent), `committed_coin` (still to be sent by unfinished schedules — informational, not reserved) and a transfer summary |
+| `POST` | `/admin-panel/manual-topups` | Send coin to a MomoLive ID. Body: `{ momo_user_id, total_amount, customer_name?, amount_per_send?, interval_minutes? }` — the last two together make it a schedule. Rejected with `400` if `total_amount` exceeds the remaining `coin_limit`; a schedule that later finds the limit used up auto-pauses until the limit is topped up |
+| `GET` | `/admin-panel/manual-topups` | Own manual top-ups. `?status=active\|completed\|cancelled\|paused&limit&offset` |
+| `GET` | `/admin-panel/manual-topups/:id/sends` | Per-send history of one own top-up (someone else's → `404`) |
+| `POST` | `/admin-panel/manual-topups/:id/pause` / `resume` / `cancel` | Manage one own schedule |
+| `GET` | `/admin-panel/transfers` | Every individual coin send across all own top-ups, newest first. `?status=success\|failed&limit&offset` |
 
 ### Webhooks (Duitku calls these — you don't)
 

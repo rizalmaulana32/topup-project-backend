@@ -21,6 +21,7 @@ import { CheckEmailDto } from './dto/check-email.dto';
 import { RegisterAffiliateDto } from './dto/register-affiliate.dto';
 import { UpdateBankDetailsDto } from './dto/update-bank-details.dto';
 import { WithdrawDto } from './dto/withdraw.dto';
+import { WithdrawalMethod } from './entities/commission-withdrawal.entity';
 
 @ApiTags('affiliate')
 @Controller('affiliate')
@@ -97,7 +98,10 @@ export class AffiliatesController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.AFFILIATOR)
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Request a commission payout' })
+  @ApiOperation({
+    summary:
+      'Request a commission payout - method bank (default, manual transfer) or momo_coin (coins sent to momo_user_id on approval, 1 coin = Rp1 of net_amount)',
+  })
   async withdraw(
     @Body() dto: WithdrawDto,
     @Req() request: Request & { user: AuthenticatedUser },
@@ -105,11 +109,17 @@ export class AffiliatesController {
     const withdrawal = await this.affiliatesService.requestWithdrawal(
       request.user.id,
       dto.amount,
+      {
+        method: dto.method ?? WithdrawalMethod.BANK,
+        momoUserId: dto.momo_user_id,
+      },
     );
     return {
       success: true,
       data: {
         withdrawal_id: withdrawal.id,
+        method: withdrawal.method,
+        momo_user_id: withdrawal.momoUserId,
         amount: withdrawal.amount,
         admin_fee: withdrawal.adminFee,
         net_amount: withdrawal.netAmount,

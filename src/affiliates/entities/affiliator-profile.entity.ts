@@ -4,9 +4,11 @@ import {
   DeleteDateColumn,
   Entity,
   JoinColumn,
+  ManyToOne,
   OneToOne,
   PrimaryGeneratedColumn,
 } from 'typeorm';
+import { AdminProfile } from '../../manual-topup/entities/admin-profile.entity';
 import { User } from '../../users/entities/user.entity';
 
 @Entity('affiliator_profiles')
@@ -107,6 +109,14 @@ export class AffiliatorProfile {
     nullable: true,
   })
   currentPeriodMonth: string | null;
+
+  /** The admin whose referral code this affiliate registered with, if any. */
+  @Column({ name: 'admin_profile_id', type: 'bigint', nullable: true })
+  adminProfileId: string | null;
+
+  @ManyToOne(() => AdminProfile)
+  @JoinColumn({ name: 'admin_profile_id' })
+  adminProfile: AdminProfile | null;
 
   @Column({ name: 'approved_by', type: 'bigint', nullable: true })
   approvedBy: string | null;

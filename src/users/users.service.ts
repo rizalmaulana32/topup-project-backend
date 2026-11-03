@@ -46,6 +46,23 @@ export class UsersService {
     await this.userRepository.update(id, { passwordHash });
   }
 
+  async updateAccount(
+    id: string,
+    changes: { name?: string; email?: string; passwordHash?: string },
+  ): Promise<void> {
+    if (changes.email) {
+      const existing = await this.findByEmail(changes.email);
+      if (existing && existing.id !== id) {
+        throw new ConflictException(
+          `Email ${changes.email} is already registered`,
+        );
+      }
+    }
+    if (Object.keys(changes).length > 0) {
+      await this.userRepository.update(id, changes);
+    }
+  }
+
   /**
    * Frees up a deactivated user's email for reuse by a brand new
    * registration, without losing any historical data on this row

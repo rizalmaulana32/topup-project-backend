@@ -1,9 +1,12 @@
 import {
+  BadGatewayException,
+  BadRequestException,
   ConflictException,
   ForbiddenException,
   NotFoundException,
 } from '@nestjs/common';
 import { DataSource, Repository } from 'typeorm';
+import type { ProviderTopUpPort } from '../provider/provider-top-up.port';
 import { SettingsService } from '../settings/settings.service';
 import { TransactionsService } from '../transactions/transactions.service';
 import { UserRole, UserStatus } from '../users/entities/user.entity';
@@ -13,6 +16,7 @@ import { AffiliatorProfile } from './entities/affiliator-profile.entity';
 import { CommissionLog } from './entities/commission-log.entity';
 import {
   CommissionWithdrawal,
+  WithdrawalMethod,
   WithdrawalStatus,
 } from './entities/commission-withdrawal.entity';
 
@@ -31,6 +35,12 @@ describe('AffiliatesService', () => {
   let profileSoftDeleteMock: jest.Mock;
   let findByReferralCodeMock: jest.Mock;
   let settingsGetMock: jest.Mock;
+  let checkIdMock: jest.Mock;
+  let injectCoinMock: jest.Mock;
+  let withdrawalUpdateMock: jest.Mock;
+  let withdrawalFindMock: jest.Mock;
+  let adminProfileFindOneMock: jest.Mock;
+  let findByIdsMock: jest.Mock;
   let service: AffiliatesService;
 
   const defaultSettings = {
@@ -54,6 +64,12 @@ describe('AffiliatesService', () => {
     profileSoftDeleteMock = jest.fn();
     findByReferralCodeMock = jest.fn();
     settingsGetMock = jest.fn().mockResolvedValue(defaultSettings);
+    checkIdMock = jest.fn();
+    injectCoinMock = jest.fn();
+    withdrawalUpdateMock = jest.fn();
+    withdrawalFindMock = jest.fn().mockResolvedValue([]);
+    adminProfileFindOneMock = jest.fn();
+    findByIdsMock = jest.fn().mockResolvedValue([]);
 
     const profileRepository = {
       create: profileCreateMock,
@@ -67,8 +83,12 @@ describe('AffiliatesService', () => {
     const withdrawalRepository = {
       findOne: withdrawalFindOneMock,
       save: withdrawalSaveMock,
+      find: withdrawalFindMock,
+      update: withdrawalUpdateMock,
     } as unknown as Repository<CommissionWithdrawal>;
-    const dataSource = {} as unknown as DataSource;
+    const dataSource = {
+      getRepository: () => ({ findOne: adminProfileFindOneMock }),
+    } as unknown as DataSource;
     const usersService = {
       createUser: createUserMock,
       findByEmail: findByEmailMock,
@@ -78,6 +98,7 @@ describe('AffiliatesService', () => {
     } as unknown as UsersService;
     const transactionsService = {
       findByReferralCode: findByReferralCodeMock,
+      findByIds: findByIdsMock,
     } as unknown as TransactionsService;
     const settingsService = {
       get: settingsGetMock,
@@ -91,10 +112,114 @@ describe('AffiliatesService', () => {
       usersService,
       transactionsService,
       settingsService,
+      {
+        checkId: checkIdMock,
+        injectCoin: injectCoinMock,
+      } as unknown as ProviderTopUpPort,
     );
   });
 
+  describe('getAdminAffiliateDetail', () => {
+    it('adds the Momo username and avatar per referred transaction, one lookup per distinct ID, null on failure', async () => {
+      profileFindOneMock.mockResolvedValue({
+        id: '17',
+        affiliateCode: 'LOVERS',
+        user: { name: 'A', email: 'a@x.com', status: UserStatus.ACTIVE },
+      });
+      findByReferralCodeMock.mockResolvedValue([
+        { id: 'TRX-1', targetUserId: '111' },
+        { id: 'TRX-2', targetUserId: '111' },
+        { id: 'TRX-3', targetUserId: '222' },
+      ]);
+      commissionLogFindMock.mockResolvedValue([]);
+      checkIdMock.mockImplementation((_game: string, id: string) =>
+        id === '111'
+          ? Promise.resolve({ username: 'Budi', avatarUrl: 'https://a/b.png' })
+          : Promise.reject(new Error('user not found')),
+      );
+
+      const result = await service.getAdminAffiliateDetail('17');
+
+      expect(checkIdMock).toHaveBeenCalledTimes(2);
+      expect(
+        result.referred_transactions.map((t) => [
+          t.target_user_id,
+          t.username,
+          t.avatar_url,
+        ]),
+      ).toEqual([
+        ['111', 'Budi', 'https://a/b.png'],
+        ['111', 'Budi', 'https://a/b.png'],
+        ['222', null, null],
+      ]);
+    });
+
+    it('adds Momo info to commission history, including transactions under an old referral code', async () => {
+      profileFindOneMock.mockResolvedValue({
+        id: '17',
+        affiliateCode: 'NEWCODE',
+        user: { name: 'A', email: 'a@x.com', status: UserStatus.ACTIVE },
+      });
+      findByReferralCodeMock.mockResolvedValue([]);
+      commissionLogFindMock.mockResolvedValue([
+        { type: 'credit', transactionId: 'TRX-OLD' },
+        { type: 'debit', transactionId: null },
+      ]);
+      findByIdsMock.mockResolvedValue([{ id: 'TRX-OLD', targetUserId: '333' }]);
+      checkIdMock.mockResolvedValue({ username: 'Sari', avatarUrl: 'x.png' });
+
+      const result = await service.getAdminAffiliateDetail('17');
+
+      expect(findByIdsMock).toHaveBeenCalledWith(['TRX-OLD']);
+      expect(
+        result.commission_history.map((c) => [
+          c.transaction_id,
+          c.target_user_id,
+          c.username,
+          c.avatar_url,
+        ]),
+      ).toEqual([
+        ['TRX-OLD', '333', 'Sari', 'x.png'],
+        [null, null, null, null],
+      ]);
+    });
+  });
+
   describe('register', () => {
+    const registerDto = {
+      name: 'Ana Affiliate',
+      email: 'ana@example.com',
+      password: 'super-secret',
+      bank_name: 'BCA',
+      account_number: '123',
+      account_holder: 'Ana',
+      phone_number: '0812',
+    };
+
+    it('links the new affiliate to the admin whose referral code was used', async () => {
+      adminProfileFindOneMock.mockResolvedValue({
+        id: '5',
+        user: { status: UserStatus.ACTIVE },
+      });
+      createUserMock.mockResolvedValue({ id: '1', email: 'ana@example.com' });
+      profileCreateMock.mockImplementation((entity) => entity);
+
+      await service.register({ ...registerDto, referral_code: 'ADM-ABC123' });
+
+      expect(profileCreateMock).toHaveBeenCalledWith(
+        expect.objectContaining({ adminProfileId: '5' }),
+      );
+    });
+
+    it('rejects an unknown admin referral code without creating the user', async () => {
+      adminProfileFindOneMock.mockResolvedValue(null);
+
+      await expect(
+        service.register({ ...registerDto, referral_code: 'ADM-NOPE' }),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(createUserMock).not.toHaveBeenCalled();
+    });
+
     it('creates a pending user and an affiliate profile using the global commission rate', async () => {
       createUserMock.mockResolvedValue({
         id: '1',
@@ -143,6 +268,56 @@ describe('AffiliatesService', () => {
   });
 
   describe('getDashboard', () => {
+    it('describes withdrawal entries in commission_history as bank or Momo coin payouts', async () => {
+      profileFindOneMock.mockResolvedValue({
+        id: '1',
+        userId: '1',
+        affiliateCode: 'AFF-ABC123',
+        user: { status: UserStatus.ACTIVE },
+      });
+      findByReferralCodeMock.mockResolvedValue([]);
+      commissionLogFindMock.mockResolvedValue([
+        { type: 'debit', transactionId: null, withdrawalId: 'WDW-COIN' },
+        { type: 'debit', transactionId: null, withdrawalId: 'WDW-BANK' },
+      ]);
+      withdrawalFindMock.mockResolvedValue([
+        {
+          id: 'WDW-COIN',
+          method: WithdrawalMethod.MOMO_COIN,
+          momoUserId: '7100001',
+          netAmount: '60000.00',
+          bankName: null,
+        },
+        {
+          id: 'WDW-BANK',
+          method: WithdrawalMethod.BANK,
+          momoUserId: null,
+          netAmount: '50000.00',
+          bankName: 'BCA',
+        },
+      ]);
+      checkIdMock.mockResolvedValue({ username: 'Budi', avatarUrl: 'b.png' });
+
+      const result = await service.getDashboard('1');
+
+      expect(result.commission_history[0].withdrawal).toEqual(
+        expect.objectContaining({
+          method: WithdrawalMethod.MOMO_COIN,
+          coin_amount: '60000.00',
+          momo_user_id: '7100001',
+          momo_username: 'Budi',
+          momo_avatar_url: 'b.png',
+        }),
+      );
+      expect(result.commission_history[1].withdrawal).toEqual(
+        expect.objectContaining({
+          method: WithdrawalMethod.BANK,
+          coin_amount: null,
+          bank_name: 'BCA',
+        }),
+      );
+    });
+
     it('throws NotFoundException when no profile exists for the user', async () => {
       profileFindOneMock.mockResolvedValue(null);
 
@@ -176,12 +351,14 @@ describe('AffiliatesService', () => {
       findByReferralCodeMock.mockResolvedValue([
         {
           id: 'TRX-1',
+          targetUserId: '111',
           paymentStatus: 'paid',
           grossAmount: '20000.00',
           createdAt: new Date('2026-08-10T00:00:00Z'),
         },
       ]);
       commissionLogFindMock.mockResolvedValue([]);
+      checkIdMock.mockResolvedValue({ username: 'Budi', avatarUrl: 'b.png' });
 
       const result = await service.getDashboard('1');
 
@@ -189,7 +366,12 @@ describe('AffiliatesService', () => {
       expect(result.affiliate_code).toBe('AFF-ABC123');
       expect(result.referred_transaction_count).toBe(1);
       expect(result.referred_transactions[0]).toEqual(
-        expect.objectContaining({ transaction_id: 'TRX-1' }),
+        expect.objectContaining({
+          transaction_id: 'TRX-1',
+          target_user_id: '111',
+          username: 'Budi',
+          avatar_url: 'b.png',
+        }),
       );
       expect(result.commission_history).toEqual([]);
     });
@@ -240,7 +422,10 @@ describe('AffiliatesService', () => {
         affiliateCode: null,
         user: { status: UserStatus.PENDING_APPROVAL },
       };
-      const approvedProfile = { ...pendingProfile, affiliateCode: 'YAY-CUSTOM' };
+      const approvedProfile = {
+        ...pendingProfile,
+        affiliateCode: 'YAY-CUSTOM',
+      };
       profileFindOneMock
         .mockResolvedValueOnce(pendingProfile) // findProfileByIdOrFail
         .mockResolvedValueOnce(null) // custom-code uniqueness check: free
@@ -430,30 +615,101 @@ describe('AffiliatesService', () => {
   });
 
   describe('approveWithdrawal', () => {
-    it('moves a pending withdrawal to approved without any disbursement call', async () => {
-      withdrawalFindOneMock.mockResolvedValue({
+    // In-memory row so the conditional update (WHERE status = pending) behaves like the DB.
+    let row: Record<string, unknown>;
+    beforeEach(() => {
+      withdrawalFindOneMock.mockImplementation(() =>
+        Promise.resolve({ ...row }),
+      );
+      withdrawalUpdateMock.mockImplementation(
+        (
+          criteria: string | { status?: string },
+          patch: Record<string, unknown>,
+        ) => {
+          if (typeof criteria === 'object' && criteria.status !== row.status) {
+            return Promise.resolve({ affected: 0 });
+          }
+          row = { ...row, ...patch };
+          return Promise.resolve({ affected: 1 });
+        },
+      );
+    });
+
+    it('moves a pending bank withdrawal to approved without sending anything', async () => {
+      row = {
         id: 'WDW-1',
+        method: WithdrawalMethod.BANK,
         status: WithdrawalStatus.PENDING,
-      });
+      };
 
       const result = await service.approveWithdrawal('WDW-1', 'admin-1');
 
       expect(result.status).toBe(WithdrawalStatus.APPROVED);
       expect(result.approvedBy).toBe('admin-1');
       expect(result.approvedAt).toBeInstanceOf(Date);
-      expect(withdrawalSaveMock).toHaveBeenCalledTimes(1);
+      expect(injectCoinMock).not.toHaveBeenCalled();
     });
 
     it('throws ConflictException when the withdrawal is not pending', async () => {
-      withdrawalFindOneMock.mockResolvedValue({
+      row = {
         id: 'WDW-1',
+        method: WithdrawalMethod.MOMO_COIN,
         status: WithdrawalStatus.APPROVED,
-      });
+      };
 
       await expect(
         service.approveWithdrawal('WDW-1', 'admin-1'),
       ).rejects.toBeInstanceOf(ConflictException);
-      expect(withdrawalSaveMock).not.toHaveBeenCalled();
+      expect(injectCoinMock).not.toHaveBeenCalled();
+    });
+
+    it('sends net_amount Momo coins and marks a momo_coin withdrawal paid', async () => {
+      row = {
+        id: 'WDW-1',
+        method: WithdrawalMethod.MOMO_COIN,
+        momoUserId: '7100001',
+        netAmount: '95000.00',
+        status: WithdrawalStatus.PENDING,
+      };
+      injectCoinMock.mockResolvedValue({ success: true, response: 'ok' });
+
+      const result = await service.approveWithdrawal('WDW-1', 'admin-1');
+
+      expect(injectCoinMock).toHaveBeenCalledWith(
+        expect.objectContaining({ targetUserId: '7100001', coin: 95000 }),
+      );
+      expect(result.status).toBe(WithdrawalStatus.PAID);
+      expect(result.processedBy).toBe('admin-1');
+    });
+
+    it('puts a momo_coin withdrawal back to pending when the coin send fails', async () => {
+      row = {
+        id: 'WDW-1',
+        method: WithdrawalMethod.MOMO_COIN,
+        momoUserId: '7100001',
+        netAmount: '95000.00',
+        status: WithdrawalStatus.PENDING,
+      };
+      injectCoinMock.mockRejectedValue(new Error('provider down'));
+
+      await expect(
+        service.approveWithdrawal('WDW-1', 'admin-1'),
+      ).rejects.toBeInstanceOf(BadGatewayException);
+      expect(row.status).toBe(WithdrawalStatus.PENDING);
+      expect(row.approvedBy).toBeNull();
+    });
+  });
+
+  describe('requestWithdrawal', () => {
+    it('rejects a momo_coin withdrawal to a Momo ID that does not exist', async () => {
+      checkIdMock.mockRejectedValue(new Error('user not found'));
+
+      await expect(
+        service.requestWithdrawal('1', 100000, {
+          method: WithdrawalMethod.MOMO_COIN,
+          momoUserId: '999',
+        }),
+      ).rejects.toBeInstanceOf(BadRequestException);
     });
   });
 

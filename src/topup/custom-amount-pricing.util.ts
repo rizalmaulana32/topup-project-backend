@@ -12,6 +12,15 @@
  */
 export const MIN_CUSTOM_AMOUNT_RUPIAH = 10000;
 
+/**
+ * Extra coin on every custom-amount top-up, per mille (‰) of the amount
+ * paid, on top of the poster's tier bonus (client request 2026-11-03:
+ * "koin yang akan dikirim ditambahkan 0.7% dari transaksi"). It compensates
+ * the customer for the LinkQu admin fee in coin - the amount charged
+ * through LinkQu stays exactly the typed nominal. Floored to a whole coin.
+ */
+export const CUSTOM_AMOUNT_EXTRA_COIN_PER_MILLE = 7; // 0.7%
+
 const BONUS_TIERS: { threshold: number; bonus: number }[] = [
   { threshold: 30000000, bonus: 600000 },
   { threshold: 20000000, bonus: 400000 },
@@ -35,6 +44,8 @@ const BONUS_TIERS: { threshold: number; bonus: number }[] = [
 export interface CustomAmountPricing {
   coinAmount: number;
   bonusCoin: number;
+  /** The 0.7% extra (CUSTOM_AMOUNT_EXTRA_COIN_PER_MILLE, pre-cut), already included in coinAmount. */
+  extraCoin: number;
   costBasis: number;
 }
 
@@ -66,9 +77,14 @@ export function calculateCustomAmountPricing(
   marginRatePercent: number,
 ): CustomAmountPricing {
   const bonusCoin = bonusForAmount(amount);
-  const fullValueCoin = amount + bonusCoin;
+  // Per mille keeps this integer math - 0.7 as a float makes e.g.
+  // 350000 * 0.007 land a hair under 2450 and floor away a coin.
+  const extraCoin = Math.floor(
+    (amount * CUSTOM_AMOUNT_EXTRA_COIN_PER_MILLE) / 1000,
+  );
+  const fullValueCoin = amount + bonusCoin + extraCoin;
   const coinAmount = Math.floor(fullValueCoin * (1 - marginRatePercent / 100));
   const costBasis = coinAmount;
 
-  return { coinAmount, bonusCoin, costBasis };
+  return { coinAmount, bonusCoin, extraCoin, costBasis };
 }

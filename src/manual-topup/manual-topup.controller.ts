@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   Patch,
@@ -9,7 +10,12 @@ import {
   Req,
   UseGuards,
 } from '@nestjs/common';
-import { ApiBearerAuth, ApiOperation, ApiParam, ApiTags } from '@nestjs/swagger';
+import {
+  ApiBearerAuth,
+  ApiOperation,
+  ApiParam,
+  ApiTags,
+} from '@nestjs/swagger';
 import { Request } from 'express';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { Roles } from '../auth/roles.decorator';
@@ -20,6 +26,12 @@ import { AdjustCoinLimitDto } from './dto/adjust-coin-limit.dto';
 import { CreateAdminDto } from './dto/create-admin.dto';
 import { CreateManualTopupDto } from './dto/create-manual-topup.dto';
 import { ListManualTopupsDto } from './dto/list-manual-topups.dto';
+import { UpdateAdminDto } from './dto/update-admin.dto';
+import { AdminProfile } from './entities/admin-profile.entity';
+import {
+  ManualTopupSend,
+  ManualTopupSendStatus,
+} from './entities/manual-topup-send.entity';
 import { ManualTopupService } from './manual-topup.service';
 
 @ApiTags('admin')
@@ -44,6 +56,7 @@ export class ManualTopupController {
       email: dto.email,
       password: dto.password,
       coinLimit: dto.coin_limit,
+      referralCode: dto.referral_code,
       createdBy: request.user.id,
     });
     return {
@@ -52,27 +65,71 @@ export class ManualTopupController {
         profile_id: profile.id,
         user_id: profile.userId,
         coin_limit: profile.coinLimit,
+        referral_code: profile.referralCode,
       },
     };
   }
 
   @Get('manual-admins')
-  @ApiOperation({ summary: 'List manual-send admin accounts and their coin budgets' })
+  @ApiOperation({
+    summary: 'List manual-send admin accounts and their coin budgets',
+  })
   async listAdmins() {
     const profiles = await this.manualTopupService.findAllAdmins();
     return {
       success: true,
       data: profiles.map((profile) => ({
-        profile_id: profile.id,
-        user_id: profile.userId,
-        name: profile.user.name,
-        email: profile.user.email,
-        coin_limit: profile.coinLimit,
-        total_coin_sent: profile.totalCoinSent,
-        created_by: profile.createdBy,
-        created_at: profile.createdAt,
+        ...toAdminResponse(profile),
+        affiliate_count: profile.affiliateCount,
       })),
     };
+  }
+
+  @Get('manual-admins/:id')
+  @ApiOperation({
+    summary:
+      'Admin detail: profile, coin limit, linked affiliates, and the full manual coin transfer history (every manual top-up with each send). Works for deleted admins too.',
+  })
+  @ApiParam({
+    name: 'id',
+    description: 'The admin PROFILE ID from GET /admin/manual-admins',
+  })
+  async getAdmin(@Param('id') id: string) {
+    const detail = await this.manualTopupService.getAdminDetail(id);
+    return { success: true, data: toAdminDetailResponse(detail) };
+  }
+
+  @Patch('manual-admins/:id')
+  @ApiOperation({
+    summary:
+      "Update an admin's name, email, password and/or referral_code - only the fields sent are changed",
+  })
+  @ApiParam({
+    name: 'id',
+    description: 'The admin PROFILE ID from GET /admin/manual-admins',
+  })
+  async updateAdmin(@Param('id') id: string, @Body() dto: UpdateAdminDto) {
+    const profile = await this.manualTopupService.updateAdmin(id, {
+      name: dto.name,
+      email: dto.email,
+      password: dto.password,
+      referralCode: dto.referral_code,
+    });
+    return { success: true, data: toAdminResponse(profile) };
+  }
+
+  @Delete('manual-admins/:id')
+  @ApiOperation({
+    summary:
+      'Delete an admin (soft delete): deactivates the account, frees the email for reuse and cancels their unfinished manual top-up schedules. Affiliates linked to the admin keep the link.',
+  })
+  @ApiParam({
+    name: 'id',
+    description: 'The admin PROFILE ID from GET /admin/manual-admins',
+  })
+  async deleteAdmin(@Param('id') id: string) {
+    await this.manualTopupService.deleteAdmin(id);
+    return { success: true };
   }
 
   @Patch('manual-admins/:id/coin-limit')
@@ -80,7 +137,10 @@ export class ManualTopupController {
     summary:
       "Top up or deduct an admin's coin budget - amount is added to the current limit, pass a negative number to deduct",
   })
-  @ApiParam({ name: 'id', description: 'The admin PROFILE ID from GET /admin/manual-admins' })
+  @ApiParam({
+    name: 'id',
+    description: 'The admin PROFILE ID from GET /admin/manual-admins',
+  })
   async adjustCoinLimit(
     @Param('id') id: string,
     @Body() dto: AdjustCoinLimitDto,
@@ -146,50 +206,77 @@ export class ManualTopupController {
 
   @Get('manual-topups/:id/sends')
   @Roles(UserRole.SUPERADMIN, UserRole.ADMIN)
-  @ApiOperation({ summary: 'Per-installment send history for one manual top-up' })
-  async listManualTopupSends(@Param('id') id: string) {
-    const sends = await this.manualTopupService.findSendsForManualTopup(id);
+  @ApiOperation({
+    summary:
+      'Per-installment send history for one manual top-up (an admin-role caller can only open their own)',
+  })
+  async listManualTopupSends(
+    @Param('id') id: string,
+    @Req() request: Request & { user: AuthenticatedUser },
+  ) {
+    const sends = await this.manualTopupService.findSendsForManualTopup(
+      id,
+      ownerFilter(request.user),
+    );
     return {
       success: true,
-      data: sends.map((send) => ({
-        id: send.id,
-        amount: send.amount,
-        status: send.status,
-        provider_response: send.providerResponse,
-        sent_at: send.sentAt,
-      })),
+      data: sends.map(toSendResponse),
     };
   }
 
   @Post('manual-topups/:id/cancel')
-  @ApiOperation({ summary: 'Cancel an active/paused manual top-up schedule before it completes' })
-  async cancelManualTopup(@Param('id') id: string) {
-    const manualTopup = await this.manualTopupService.cancel(id);
+  @Roles(UserRole.SUPERADMIN, UserRole.ADMIN)
+  @ApiOperation({
+    summary:
+      'Cancel an active/paused manual top-up schedule before it completes',
+  })
+  async cancelManualTopup(
+    @Param('id') id: string,
+    @Req() request: Request & { user: AuthenticatedUser },
+  ) {
+    const manualTopup = await this.manualTopupService.cancel(
+      id,
+      ownerFilter(request.user),
+    );
     return { success: true, data: toManualTopupResponse(manualTopup) };
   }
 
   @Post('manual-topups/:id/pause')
+  @Roles(UserRole.SUPERADMIN, UserRole.ADMIN)
   @ApiOperation({
     summary:
       'Manually pause an active manual top-up schedule (stops the scheduler from sending further installments until resumed)',
   })
-  async pauseManualTopup(@Param('id') id: string) {
-    const manualTopup = await this.manualTopupService.pause(id);
+  async pauseManualTopup(
+    @Param('id') id: string,
+    @Req() request: Request & { user: AuthenticatedUser },
+  ) {
+    const manualTopup = await this.manualTopupService.pause(
+      id,
+      ownerFilter(request.user),
+    );
     return { success: true, data: toManualTopupResponse(manualTopup) };
   }
 
   @Post('manual-topups/:id/resume')
+  @Roles(UserRole.SUPERADMIN, UserRole.ADMIN)
   @ApiOperation({
     summary:
       'Resume a paused schedule - whether it was paused manually or auto-paused for insufficient coin limit (top up the budget first in that case)',
   })
-  async resumeManualTopup(@Param('id') id: string) {
-    const manualTopup = await this.manualTopupService.resume(id);
+  async resumeManualTopup(
+    @Param('id') id: string,
+    @Req() request: Request & { user: AuthenticatedUser },
+  ) {
+    const manualTopup = await this.manualTopupService.resume(
+      id,
+      ownerFilter(request.user),
+    );
     return { success: true, data: toManualTopupResponse(manualTopup) };
   }
 }
 
-function toManualTopupResponse(manualTopup: {
+export function toManualTopupResponse(manualTopup: {
   id: string;
   momoUserId: string;
   customerName: string | null;
@@ -214,5 +301,84 @@ function toManualTopupResponse(manualTopup: {
     next_run_at: manualTopup.nextRunAt,
     created_by: manualTopup.createdBy,
     created_at: manualTopup.createdAt,
+  };
+}
+
+export function toAdminResponse(profile: AdminProfile) {
+  return {
+    profile_id: profile.id,
+    user_id: profile.userId,
+    name: profile.user.name,
+    email: profile.user.email,
+    referral_code: profile.referralCode,
+    coin_limit: profile.coinLimit,
+    total_coin_sent: profile.totalCoinSent,
+    created_by: profile.createdBy,
+    created_at: profile.createdAt,
+  };
+}
+
+export function toSendResponse(send: ManualTopupSend) {
+  return {
+    id: send.id,
+    amount: send.amount,
+    status: send.status,
+    provider_response: send.providerResponse,
+    sent_at: send.sentAt,
+  };
+}
+
+/** Admin-role callers may only touch their own manual top-ups; superadmins see everyone's. */
+function ownerFilter(user: AuthenticatedUser): string | undefined {
+  return user.role === UserRole.ADMIN ? user.id : undefined;
+}
+
+type AdminDetail = Awaited<ReturnType<ManualTopupService['getAdminDetail']>>;
+
+/** Profile, coin limit and transfer summary - shared by the superadmin detail view and /admin-panel/me. */
+export function toAdminOverview(detail: AdminDetail) {
+  const { profile, manualTopups, sends, committedCoin } = detail;
+  const successful = sends.filter(
+    (send) => send.status === ManualTopupSendStatus.SUCCESS,
+  );
+  return {
+    ...toAdminResponse(profile),
+    status: profile.user.status,
+    deleted_at: profile.deletedAt,
+    /** Coin the unfinished (active/paused) schedules still need to send - informational; it is not reserved out of coin_limit. */
+    committed_coin: committedCoin.toFixed(2),
+    summary: {
+      manual_topup_count: manualTopups.length,
+      send_count: sends.length,
+      successful_send_count: successful.length,
+      failed_send_count: sends.length - successful.length,
+      total_coin_sent_successfully: successful
+        .reduce((sum, send) => sum + Number(send.amount), 0)
+        .toFixed(2),
+    },
+  };
+}
+
+export function toAdminDetailResponse(detail: AdminDetail) {
+  const sendsByTopup = new Map<string, ManualTopupSend[]>();
+  for (const send of detail.sends) {
+    const list = sendsByTopup.get(send.manualTopupId) ?? [];
+    list.push(send);
+    sendsByTopup.set(send.manualTopupId, list);
+  }
+  return {
+    ...toAdminOverview(detail),
+    affiliates: detail.affiliates.map((affiliate) => ({
+      profile_id: affiliate.id,
+      name: affiliate.user.name,
+      email: affiliate.user.email,
+      status: affiliate.user.status,
+      affiliate_code: affiliate.affiliateCode,
+      created_at: affiliate.createdAt,
+    })),
+    manual_topups: detail.manualTopups.map((manualTopup) => ({
+      ...toManualTopupResponse(manualTopup),
+      sends: (sendsByTopup.get(manualTopup.id) ?? []).map(toSendResponse),
+    })),
   };
 }

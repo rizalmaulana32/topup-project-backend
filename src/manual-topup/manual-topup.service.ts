@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Inject,
   Injectable,
   Logger,
@@ -9,17 +10,18 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import * as bcrypt from 'bcrypt';
-import { DataSource, LessThanOrEqual, Repository } from 'typeorm';
-import { generateOrderId } from '../common/utils/id-generator.util';
+import { DataSource, In, LessThanOrEqual, Repository } from 'typeorm';
+import { AffiliatorProfile } from '../affiliates/entities/affiliator-profile.entity';
+import {
+  generateOrderId,
+  generateReferralCode,
+} from '../common/utils/id-generator.util';
 import { PROVIDER_TOP_UP_PORT } from '../provider/provider-top-up.port';
 import type { ProviderTopUpPort } from '../provider/provider-top-up.port';
 import { UserRole, UserStatus } from '../users/entities/user.entity';
 import { UsersService } from '../users/users.service';
 import { AdminProfile } from './entities/admin-profile.entity';
-import {
-  ManualTopup,
-  ManualTopupStatus,
-} from './entities/manual-topup.entity';
+import { ManualTopup, ManualTopupStatus } from './entities/manual-topup.entity';
 import {
   ManualTopupSend,
   ManualTopupSendStatus,
@@ -52,8 +54,12 @@ export class ManualTopupService {
     email: string;
     password: string;
     coinLimit: number;
+    referralCode?: string;
     createdBy: string;
   }): Promise<AdminProfile> {
+    const referralCode = params.referralCode
+      ? await this.assertReferralCodeAvailable(params.referralCode)
+      : await this.generateUniqueReferralCode();
     const passwordHash = await bcrypt.hash(params.password, BCRYPT_SALT_ROUNDS);
     const user = await this.usersService.createUser({
       name: params.name,
@@ -67,16 +73,184 @@ export class ManualTopupService {
       userId: user.id,
       coinLimit: params.coinLimit.toFixed(2),
       totalCoinSent: '0.00',
+      referralCode,
       createdBy: params.createdBy,
     });
     return this.profileRepository.save(profile);
   }
 
-  async findAllAdmins(): Promise<AdminProfile[]> {
-    return this.profileRepository.find({
+  async findAdminOrFail(adminProfileId: string): Promise<AdminProfile> {
+    const profile = await this.profileRepository.findOne({
+      where: { id: adminProfileId },
+      relations: { user: true },
+    });
+    if (!profile) {
+      throw new NotFoundException(`Admin profile ${adminProfileId} not found`);
+    }
+    return profile;
+  }
+
+  async updateAdmin(
+    adminProfileId: string,
+    changes: {
+      name?: string;
+      email?: string;
+      password?: string;
+      referralCode?: string;
+    },
+  ): Promise<AdminProfile> {
+    const profile = await this.findAdminOrFail(adminProfileId);
+
+    if (changes.referralCode && changes.referralCode !== profile.referralCode) {
+      await this.assertReferralCodeAvailable(changes.referralCode);
+      await this.profileRepository.update(profile.id, {
+        referralCode: changes.referralCode,
+      });
+    }
+
+    await this.usersService.updateAccount(profile.userId, {
+      ...(changes.name !== undefined && { name: changes.name }),
+      ...(changes.email !== undefined && { email: changes.email }),
+      ...(changes.password !== undefined && {
+        passwordHash: await bcrypt.hash(changes.password, BCRYPT_SALT_ROUNDS),
+      }),
+    });
+
+    return this.findAdminOrFail(adminProfileId);
+  }
+
+  /**
+   * Soft-deletes an admin: deactivates the user, frees the email for reuse
+   * (same as an affiliate delete) and soft-deletes the profile. Their
+   * unfinished manual top-up schedules are cancelled first - otherwise the
+   * cron would keep sending them with no coin budget check (sendInstallment
+   * treats a creator without an admin profile as an unlimited superadmin).
+   * Affiliates linked to this admin keep their link.
+   */
+  async deleteAdmin(adminProfileId: string): Promise<void> {
+    const profile = await this.findAdminOrFail(adminProfileId);
+    await this.manualTopupRepository.update(
+      {
+        createdBy: profile.userId,
+        status: In([ManualTopupStatus.ACTIVE, ManualTopupStatus.PAUSED]),
+      },
+      { status: ManualTopupStatus.CANCELLED, nextRunAt: null },
+    );
+    await this.usersService.updateStatus(profile.userId, UserStatus.INACTIVE);
+    await this.usersService.archiveEmailForReuse(profile.userId);
+    await this.profileRepository.softDelete(profile.id);
+  }
+
+  async findAllAdmins(): Promise<
+    (AdminProfile & { affiliateCount: number })[]
+  > {
+    const profiles = await this.profileRepository.find({
       relations: { user: true },
       order: { createdAt: 'DESC' },
     });
+    const counts: { admin_profile_id: string; count: string }[] =
+      await this.dataSource
+        .getRepository(AffiliatorProfile)
+        .createQueryBuilder('affiliate')
+        .select('affiliate.admin_profile_id', 'admin_profile_id')
+        .addSelect('COUNT(*)', 'count')
+        .where('affiliate.admin_profile_id IS NOT NULL')
+        .groupBy('affiliate.admin_profile_id')
+        .getRawMany();
+    const countByAdmin = new Map(
+      counts.map((row) => [String(row.admin_profile_id), Number(row.count)]),
+    );
+    return profiles.map((profile) =>
+      Object.assign(profile, {
+        affiliateCount: countByAdmin.get(String(profile.id)) ?? 0,
+      }),
+    );
+  }
+
+  /**
+   * Everything for the admin detail page: the profile (deleted admins
+   * included, so their history stays viewable), affiliates linked via the
+   * admin's referral code, and every manual top-up the admin created with
+   * each one's full per-send history.
+   * ponytail: unpaginated - fine at current volumes; page manual_topups if an
+   * admin accumulates thousands of schedules.
+   */
+  async getAdminDetail(adminProfileId: string) {
+    const profile = await this.profileRepository.findOne({
+      where: { id: adminProfileId },
+      relations: { user: true },
+      withDeleted: true,
+    });
+    if (!profile) {
+      throw new NotFoundException(`Admin profile ${adminProfileId} not found`);
+    }
+
+    const [manualTopups, affiliates] = await Promise.all([
+      this.manualTopupRepository.find({
+        where: { createdBy: profile.userId },
+        order: { createdAt: 'DESC' },
+      }),
+      this.dataSource.getRepository(AffiliatorProfile).find({
+        where: { adminProfileId: profile.id },
+        relations: { user: true },
+        order: { createdAt: 'DESC' },
+      }),
+    ]);
+    const sends = manualTopups.length
+      ? await this.sendRepository.find({
+          where: { manualTopupId: In(manualTopups.map((m) => m.id)) },
+          order: { sentAt: 'ASC' },
+        })
+      : [];
+
+    const committedCoin = manualTopups
+      .filter(
+        (m) =>
+          m.status === ManualTopupStatus.ACTIVE ||
+          m.status === ManualTopupStatus.PAUSED,
+      )
+      .reduce(
+        (sum, m) => sum + Number(m.totalAmount) - Number(m.amountSent),
+        0,
+      );
+
+    return { profile, manualTopups, sends, affiliates, committedCoin };
+  }
+
+  async findAdminIdByUserIdOrFail(userId: string): Promise<string> {
+    const profile = await this.profileRepository.findOne({
+      where: { userId },
+    });
+    if (!profile) {
+      throw new NotFoundException('Admin profile not found');
+    }
+    return profile.id;
+  }
+
+  /** Throws if another admin (deleted ones included - the DB constraint covers them) already has the code. */
+  private async assertReferralCodeAvailable(code: string): Promise<string> {
+    const existing = await this.profileRepository.findOne({
+      where: { referralCode: code },
+      withDeleted: true,
+    });
+    if (existing) {
+      throw new ConflictException(`Referral code ${code} is already in use`);
+    }
+    return code;
+  }
+
+  private async generateUniqueReferralCode(): Promise<string> {
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const candidate = generateReferralCode('ADM');
+      const existing = await this.profileRepository.findOne({
+        where: { referralCode: candidate },
+        withDeleted: true,
+      });
+      if (!existing) return candidate;
+    }
+    throw new ConflictException(
+      'Could not generate a unique referral code, please retry',
+    );
   }
 
   /** amount is added to the current coin_limit - pass a negative number to deduct. */
@@ -131,7 +305,8 @@ export class ManualTopupService {
     createdBy: string;
   }): Promise<ManualTopup> {
     const isScheduled =
-      params.amountPerSend !== undefined || params.intervalMinutes !== undefined;
+      params.amountPerSend !== undefined ||
+      params.intervalMinutes !== undefined;
     if (isScheduled && (!params.amountPerSend || !params.intervalMinutes)) {
       throw new BadRequestException(
         'amount_per_send and interval_minutes must be given together for a scheduled send',
@@ -141,6 +316,24 @@ export class ManualTopupService {
       throw new BadRequestException(
         'amount_per_send cannot exceed total_amount',
       );
+    }
+
+    // An admin can't send more than their remaining coin_limit. Unfinished
+    // schedules aren't reserved - if a later send finds the limit used up,
+    // sendInstallment auto-pauses that schedule until the limit is topped up.
+    const adminProfile = await this.profileRepository.findOne({
+      where: { userId: params.createdBy },
+      withDeleted: true,
+    });
+    if (adminProfile) {
+      if (adminProfile.deletedAt) {
+        throw new ForbiddenException('This admin account has been deleted');
+      }
+      if (params.totalAmount > Number(adminProfile.coinLimit)) {
+        throw new BadRequestException(
+          `total_amount (${params.totalAmount}) exceeds your remaining coin limit (${Number(adminProfile.coinLimit)})`,
+        );
+      }
     }
 
     // Fail fast on a bad momo id, same reasoning as the real checkout flow -
@@ -199,16 +392,52 @@ export class ManualTopupService {
 
   async findSendsForManualTopup(
     manualTopupId: string,
+    ownerUserId?: string,
   ): Promise<ManualTopupSend[]> {
-    await this.findByIdOrFail(manualTopupId);
+    await this.findByIdOrFail(manualTopupId, ownerUserId);
     return this.sendRepository.find({
       where: { manualTopupId },
       order: { sentAt: 'ASC' },
     });
   }
 
-  async cancel(id: string): Promise<ManualTopup> {
-    const manualTopup = await this.findByIdOrFail(id);
+  /** Every individual coin send across all of one user's manual top-ups, newest first, with the top-up each belongs to. */
+  async findSendsForUser(
+    userId: string,
+    params: { status?: ManualTopupSendStatus; limit: number; offset: number },
+  ): Promise<{
+    items: { send: ManualTopupSend; manualTopup: ManualTopup | undefined }[];
+    total: number;
+  }> {
+    const qb = this.sendRepository
+      .createQueryBuilder('send')
+      .innerJoin(ManualTopup, 'topup', 'topup.id = send.manual_topup_id')
+      .where('topup.created_by = :userId', { userId })
+      .orderBy('send.sentAt', 'DESC')
+      .take(params.limit)
+      .skip(params.offset);
+    if (params.status) {
+      qb.andWhere('send.status = :status', { status: params.status });
+    }
+    const [sends, total] = await qb.getManyAndCount();
+
+    const topups = sends.length
+      ? await this.manualTopupRepository.find({
+          where: { id: In([...new Set(sends.map((s) => s.manualTopupId))]) },
+        })
+      : [];
+    const topupById = new Map(topups.map((t) => [t.id, t]));
+    return {
+      items: sends.map((send) => ({
+        send,
+        manualTopup: topupById.get(send.manualTopupId),
+      })),
+      total,
+    };
+  }
+
+  async cancel(id: string, ownerUserId?: string): Promise<ManualTopup> {
+    const manualTopup = await this.findByIdOrFail(id, ownerUserId);
     if (
       manualTopup.status === ManualTopupStatus.COMPLETED ||
       manualTopup.status === ManualTopupStatus.CANCELLED
@@ -226,8 +455,8 @@ export class ManualTopupService {
   }
 
   /** Manually pauses an ACTIVE schedule - distinct from the automatic pause on insufficient coin limit, but resumed the same way (resume()). */
-  async pause(id: string): Promise<ManualTopup> {
-    const manualTopup = await this.findByIdOrFail(id);
+  async pause(id: string, ownerUserId?: string): Promise<ManualTopup> {
+    const manualTopup = await this.findByIdOrFail(id, ownerUserId);
     if (manualTopup.status !== ManualTopupStatus.ACTIVE) {
       throw new ConflictException(
         `Manual top-up ${id} is not active (current status: ${manualTopup.status})`,
@@ -242,8 +471,8 @@ export class ManualTopupService {
   }
 
   /** Resumes a PAUSED schedule - whether paused manually via pause() or automatically for insufficient coin limit (top up the creator's coin_limit first in that case). */
-  async resume(id: string): Promise<ManualTopup> {
-    const manualTopup = await this.findByIdOrFail(id);
+  async resume(id: string, ownerUserId?: string): Promise<ManualTopup> {
+    const manualTopup = await this.findByIdOrFail(id, ownerUserId);
     if (manualTopup.status !== ManualTopupStatus.PAUSED) {
       throw new ConflictException(
         `Manual top-up ${id} is not paused (current status: ${manualTopup.status})`,
@@ -293,9 +522,16 @@ export class ManualTopupService {
     }
   }
 
-  private async findByIdOrFail(id: string): Promise<ManualTopup> {
+  /** ownerUserId (set for admin-role callers) hides other people's top-ups behind the same 404. */
+  private async findByIdOrFail(
+    id: string,
+    ownerUserId?: string,
+  ): Promise<ManualTopup> {
     const manualTopup = await this.manualTopupRepository.findOneBy({ id });
-    if (!manualTopup) {
+    if (
+      !manualTopup ||
+      (ownerUserId !== undefined && manualTopup.createdBy !== ownerUserId)
+    ) {
       throw new NotFoundException(`Manual top-up ${id} not found`);
     }
     return manualTopup;
@@ -326,8 +562,11 @@ export class ManualTopupService {
     // last send, e.g. total 10000 / per-send 300 -> 33 sends of 300 + one
     // final send of 100).
     const amount = Math.min(Number(manualTopup.amountPerSend), remaining);
+    // withDeleted: a deleted admin must still go through the budget check
+    // (which then fails), not fall through to the unlimited superadmin path.
     const hasAdminProfile = await this.profileRepository.exists({
       where: { userId: manualTopup.createdBy },
+      withDeleted: true,
     });
 
     if (hasAdminProfile) {
@@ -389,9 +628,7 @@ export class ManualTopupService {
         : ManualTopupStatus.ACTIVE,
       nextRunAt: completed
         ? null
-        : new Date(
-            Date.now() + (manualTopup.intervalMinutes ?? 0) * 60 * 1000,
-          ),
+        : new Date(Date.now() + (manualTopup.intervalMinutes ?? 0) * 60 * 1000),
     });
   }
 
@@ -428,10 +665,7 @@ export class ManualTopupService {
     }
   }
 
-  private async refundBudget(
-    createdBy: string,
-    amount: number,
-  ): Promise<void> {
+  private async refundBudget(createdBy: string, amount: number): Promise<void> {
     const queryRunner = this.dataSource.createQueryRunner();
     await queryRunner.connect();
     await queryRunner.startTransaction();

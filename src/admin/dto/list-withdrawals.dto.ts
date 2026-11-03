@@ -1,6 +1,9 @@
 import { Transform, Type } from 'class-transformer';
 import { IsEnum, IsInt, IsOptional, IsString, Max, Min } from 'class-validator';
-import { WithdrawalStatus } from '../../affiliates/entities/commission-withdrawal.entity';
+import {
+  WithdrawalMethod,
+  WithdrawalStatus,
+} from '../../affiliates/entities/commission-withdrawal.entity';
 
 // The frontend's withdrawal tabs (Semua / Pending / Approval / Success /
 // Failed) use their own tab names, not always the stored enum value - these
@@ -20,6 +23,11 @@ export class ListWithdrawalsDto {
   )
   @IsEnum(WithdrawalStatus)
   status?: WithdrawalStatus;
+
+  /** bank or momo_coin */
+  @IsOptional()
+  @IsEnum(WithdrawalMethod)
+  method?: WithdrawalMethod;
 
   @IsOptional()
   @IsString()

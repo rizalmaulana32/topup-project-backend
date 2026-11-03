@@ -8,6 +8,13 @@ import {
 } from 'typeorm';
 import { AffiliatorProfile } from './affiliator-profile.entity';
 
+export enum WithdrawalMethod {
+  /** Manual bank transfer to the account snapshotted at request time. */
+  BANK = 'bank',
+  /** Coins sent straight to a MomoLive account on approval (1 coin = Rp1). */
+  MOMO_COIN = 'momo_coin',
+}
+
 export enum WithdrawalStatus {
   PENDING = 'pending',
   APPROVED = 'approved',
@@ -38,21 +45,39 @@ export class CommissionWithdrawal {
   amount: string;
 
   /** Flat withdrawal admin fee snapshotted at request time (platform_settings.withdrawal_admin_fee at that moment). */
-  @Column({ name: 'admin_fee', type: 'decimal', precision: 14, scale: 2, default: 0 })
+  @Column({
+    name: 'admin_fee',
+    type: 'decimal',
+    precision: 14,
+    scale: 2,
+    default: 0,
+  })
   adminFee: string;
 
   /** What the affiliate actually gets transferred - amount minus admin_fee. */
   @Column({ name: 'net_amount', type: 'decimal', precision: 14, scale: 2 })
   netAmount: string;
 
-  @Column({ name: 'bank_name' })
-  bankName: string;
+  @Column({
+    type: 'enum',
+    enum: WithdrawalMethod,
+    default: WithdrawalMethod.BANK,
+  })
+  method: WithdrawalMethod;
 
-  @Column({ name: 'account_number' })
-  accountNumber: string;
+  /** MomoLive account receiving the coins - set only for momo_coin withdrawals. */
+  @Column({ name: 'momo_user_id', type: 'varchar', nullable: true })
+  momoUserId: string | null;
 
-  @Column({ name: 'account_holder' })
-  accountHolder: string;
+  /** Bank snapshot - null for momo_coin withdrawals. */
+  @Column({ name: 'bank_name', type: 'varchar', nullable: true })
+  bankName: string | null;
+
+  @Column({ name: 'account_number', type: 'varchar', nullable: true })
+  accountNumber: string | null;
+
+  @Column({ name: 'account_holder', type: 'varchar', nullable: true })
+  accountHolder: string | null;
 
   @Column({
     type: 'enum',

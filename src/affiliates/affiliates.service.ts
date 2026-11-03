@@ -1,18 +1,23 @@
 import {
+  BadGatewayException,
   BadRequestException,
   ConflictException,
   ForbiddenException,
+  Inject,
   Injectable,
   Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
 import * as bcrypt from 'bcrypt';
-import { DataSource, Repository } from 'typeorm';
+import { DataSource, In, Repository } from 'typeorm';
 import {
   generateOrderId,
   generateReferralCode,
 } from '../common/utils/id-generator.util';
+import { AdminProfile } from '../manual-topup/entities/admin-profile.entity';
+import { PROVIDER_TOP_UP_PORT } from '../provider/provider-top-up.port';
+import type { ProviderTopUpPort } from '../provider/provider-top-up.port';
 import { SettingsService } from '../settings/settings.service';
 import { Transaction } from '../transactions/entities/transaction.entity';
 import { TransactionsService } from '../transactions/transactions.service';
@@ -30,6 +35,7 @@ import {
 } from './entities/commission-log.entity';
 import {
   CommissionWithdrawal,
+  WithdrawalMethod,
   WithdrawalStatus,
 } from './entities/commission-withdrawal.entity';
 
@@ -52,6 +58,8 @@ export class AffiliatesService {
     private readonly usersService: UsersService,
     private readonly transactionsService: TransactionsService,
     private readonly settingsService: SettingsService,
+    @Inject(PROVIDER_TOP_UP_PORT)
+    private readonly provider: ProviderTopUpPort,
   ) {}
 
   async isEmailRegistered(email: string): Promise<boolean> {
@@ -60,6 +68,19 @@ export class AffiliatesService {
   }
 
   async register(dto: RegisterAffiliateDto) {
+    // Resolved before the user row is created, so a bad code leaves nothing behind.
+    const adminProfile = dto.referral_code
+      ? await this.dataSource.getRepository(AdminProfile).findOne({
+          where: { referralCode: dto.referral_code },
+          relations: { user: true },
+        })
+      : null;
+    if (dto.referral_code && adminProfile?.user.status !== UserStatus.ACTIVE) {
+      throw new BadRequestException(
+        `Referral code ${dto.referral_code} is not valid`,
+      );
+    }
+
     const passwordHash = await bcrypt.hash(dto.password, BCRYPT_SALT_ROUNDS);
     const settings = await this.settingsService.get();
 
@@ -78,6 +99,7 @@ export class AffiliatesService {
       accountHolder: dto.account_holder,
       phoneNumber: dto.phone_number,
       commissionRate: settings.globalCommissionRate,
+      adminProfileId: adminProfile?.id ?? null,
     });
     await this.profileRepository.save(profile);
 
@@ -115,6 +137,11 @@ export class AffiliatesService {
       order: { createdAt: 'DESC' },
     });
 
+    const { momoInfo, historyItem } = await this.buildHistoryInfo(
+      referredTransactions,
+      commissionHistory,
+    );
+
     return {
       affiliate_code: profile.affiliateCode,
       bank_name: profile.bankName,
@@ -126,17 +153,12 @@ export class AffiliatesService {
       referred_transaction_count: referredTransactions.length,
       referred_transactions: referredTransactions.map((transaction) => ({
         transaction_id: transaction.id,
+        ...momoInfo(transaction.id),
         payment_status: transaction.paymentStatus,
         gross_amount: transaction.grossAmount,
         created_at: transaction.createdAt,
       })),
-      commission_history: commissionHistory.map((log) => ({
-        type: log.type,
-        amount: log.amount,
-        balance_after: log.balanceAfter,
-        description: log.description,
-        created_at: log.createdAt,
-      })),
+      commission_history: commissionHistory.map(historyItem),
     };
   }
 
@@ -145,9 +167,7 @@ export class AffiliatesService {
     const profile = await this.findProfileByIdOrFail(profileId);
 
     const referredTransactions = profile.affiliateCode
-      ? await this.transactionsService.findByReferralCode(
-          profile.affiliateCode,
-        )
+      ? await this.transactionsService.findByReferralCode(profile.affiliateCode)
       : [];
 
     const commissionHistory = await this.commissionLogRepository.find({
@@ -159,6 +179,11 @@ export class AffiliatesService {
       where: { affiliatorId: profile.id },
       order: { createdAt: 'DESC' },
     });
+
+    const { momoInfo, historyItem } = await this.buildHistoryInfo(
+      referredTransactions,
+      commissionHistory,
+    );
 
     return {
       profile_id: profile.id,
@@ -177,25 +202,23 @@ export class AffiliatesService {
       tiered_commission_enabled: profile.tieredCommissionEnabled,
       current_period_volume: profile.currentPeriodVolume,
       current_period_month: profile.currentPeriodMonth,
+      admin: toLinkedAdmin(profile.adminProfile),
       approved_by: profile.approvedBy,
       approved_at: profile.approvedAt,
       created_at: profile.createdAt,
       referred_transaction_count: referredTransactions.length,
       referred_transactions: referredTransactions.map((transaction) => ({
         transaction_id: transaction.id,
+        ...momoInfo(transaction.id),
         payment_status: transaction.paymentStatus,
         gross_amount: transaction.grossAmount,
         created_at: transaction.createdAt,
       })),
-      commission_history: commissionHistory.map((log) => ({
-        type: log.type,
-        amount: log.amount,
-        balance_after: log.balanceAfter,
-        description: log.description,
-        created_at: log.createdAt,
-      })),
+      commission_history: commissionHistory.map(historyItem),
       withdrawals: withdrawals.map((withdrawal) => ({
         withdrawal_id: withdrawal.id,
+        method: withdrawal.method,
+        momo_user_id: withdrawal.momoUserId,
         amount: withdrawal.amount,
         admin_fee: withdrawal.adminFee,
         net_amount: withdrawal.netAmount,
@@ -205,11 +228,126 @@ export class AffiliatesService {
     };
   }
 
+  /**
+   * Shared enrichment for referred_transactions and commission_history:
+   * - momoInfo(transactionId): the Momo customer a transaction topped up
+   *   (ID, username, avatar - same data as POST /topup/check-id)
+   * - historyItem(log): a commission_history entry, with that Momo info for
+   *   commission credits and a `withdrawal` object (bank or Momo coin payout)
+   *   for withdrawal debits/refunds.
+   */
+  private async buildHistoryInfo(
+    referredTransactions: Transaction[],
+    commissionHistory: CommissionLog[],
+  ) {
+    const idsOf = (key: 'transactionId' | 'withdrawalId') =>
+      commissionHistory
+        .map((log) => log[key])
+        .filter((id): id is string => id !== null);
+
+    // Commission logs can point at transactions made under an older referral
+    // code (the code is editable), so they're loaded by ID, not via referredTransactions.
+    const [commissionTransactions, withdrawals] = await Promise.all([
+      this.transactionsService.findByIds(idsOf('transactionId')),
+      idsOf('withdrawalId').length
+        ? this.withdrawalRepository.find({
+            where: { id: In(idsOf('withdrawalId')) },
+          })
+        : Promise.resolve([]),
+    ]);
+    const targetUserIdByTransaction = new Map(
+      [...referredTransactions, ...commissionTransactions].map((t) => [
+        t.id,
+        t.targetUserId,
+      ]),
+    );
+    const withdrawalById = new Map(withdrawals.map((w) => [w.id, w]));
+
+    // Same lookup as POST /topup/check-id, once per distinct Momo ID; a failed
+    // lookup yields null instead of failing the whole response.
+    // ponytail: one live provider call per distinct customer per page view;
+    // store the username at checkout if affiliates get large or MomoLive rate-limits.
+    const momoIds = new Set([
+      ...targetUserIdByTransaction.values(),
+      ...withdrawals
+        .map((w) => w.momoUserId)
+        .filter((id): id is string => id !== null),
+    ]);
+    const momoUsers = new Map(
+      await Promise.all(
+        [...momoIds].map(async (id) => {
+          try {
+            return [id, await this.provider.checkId('', id)] as const;
+          } catch {
+            return [id, null] as const;
+          }
+        }),
+      ),
+    );
+
+    const momoInfo = (transactionId: string | null) => {
+      const targetUserId = transactionId
+        ? (targetUserIdByTransaction.get(transactionId) ?? null)
+        : null;
+      const user = targetUserId ? momoUsers.get(targetUserId) : null;
+      return {
+        target_user_id: targetUserId,
+        username: user?.username ?? null,
+        avatar_url: user?.avatarUrl ?? null,
+      };
+    };
+
+    const withdrawalInfo = (withdrawalId: string | null) => {
+      const w = withdrawalId ? withdrawalById.get(withdrawalId) : undefined;
+      if (!w) return null;
+      const isCoin = w.method === WithdrawalMethod.MOMO_COIN;
+      const momoUser = w.momoUserId ? momoUsers.get(w.momoUserId) : null;
+      return {
+        withdrawal_id: w.id,
+        method: w.method,
+        status: w.status,
+        amount: w.amount,
+        admin_fee: w.adminFee,
+        net_amount: w.netAmount,
+        coin_amount: isCoin ? w.netAmount : null,
+        momo_user_id: w.momoUserId,
+        momo_username: momoUser?.username ?? null,
+        momo_avatar_url: momoUser?.avatarUrl ?? null,
+        bank_name: w.bankName,
+        account_number: w.accountNumber,
+        account_holder: w.accountHolder,
+      };
+    };
+
+    const historyItem = (log: CommissionLog) => ({
+      type: log.type,
+      amount: log.amount,
+      balance_after: log.balanceAfter,
+      description: log.description,
+      transaction_id: log.transactionId,
+      ...momoInfo(log.transactionId),
+      withdrawal: withdrawalInfo(log.withdrawalId),
+      created_at: log.createdAt,
+    });
+
+    return { momoInfo, historyItem };
+  }
+
   async findProfileByIdOrFail(profileId: string): Promise<AffiliatorProfile> {
     const profile = await this.profileRepository.findOne({
       where: { id: profileId },
       relations: { user: true },
     });
+    if (profile?.adminProfileId) {
+      // Loaded separately so a soft-deleted admin still shows up.
+      profile.adminProfile = await this.dataSource
+        .getRepository(AdminProfile)
+        .findOne({
+          where: { id: profile.adminProfileId },
+          relations: { user: true },
+          withDeleted: true,
+        });
+    }
     if (!profile) {
       throw new NotFoundException(`Affiliate profile ${profileId} not found`);
     }
@@ -260,9 +398,7 @@ export class AffiliatesService {
       where: { affiliateCode: newCode },
     });
     if (existing && existing.id !== profile.id) {
-      throw new ConflictException(
-        `Referral code ${newCode} is already in use`,
-      );
+      throw new ConflictException(`Referral code ${newCode} is already in use`);
     }
 
     profile.affiliateCode = newCode;
@@ -533,8 +669,10 @@ export class AffiliatesService {
       const originalAmount = Number(params.grossAmount) + discountAmount;
 
       let effectiveRate = Number(profile.commissionRate);
-      let periodUpdate: { currentPeriodVolume: string; currentPeriodMonth: string } | null =
-        null;
+      let periodUpdate: {
+        currentPeriodVolume: string;
+        currentPeriodMonth: string;
+      } | null = null;
       if (profile.tieredCommissionEnabled) {
         const periodKey = currentPeriodKey();
         const periodVolumeBefore =
@@ -597,7 +735,22 @@ export class AffiliatesService {
   async requestWithdrawal(
     userId: string,
     amount: number,
+    payout: { method: WithdrawalMethod; momoUserId?: string } = {
+      method: WithdrawalMethod.BANK,
+    },
   ): Promise<CommissionWithdrawal> {
+    const isCoin = payout.method === WithdrawalMethod.MOMO_COIN;
+    if (isCoin) {
+      // Catch a mistyped Momo ID now, not after an admin approves and the send fails.
+      try {
+        await this.provider.checkId('', payout.momoUserId ?? '');
+      } catch {
+        throw new BadRequestException(
+          `Momo ID ${payout.momoUserId} was not found.`,
+        );
+      }
+    }
+
     const settings = await this.settingsService.get();
     const queryRunner = this.dataSource.createQueryRunner();
     await queryRunner.connect();
@@ -646,6 +799,11 @@ export class AffiliatesService {
           `Requested amount (${amount}) does not cover the withdrawal admin fee (${adminFee}).`,
         );
       }
+      if (isCoin && !Number.isInteger(netAmount)) {
+        throw new BadRequestException(
+          `Net amount (${netAmount}) must be a whole number to pay out as Momo coins.`,
+        );
+      }
 
       const newBalance = balance - amount;
       await queryRunner.manager.update(AffiliatorProfile, profile.id, {
@@ -658,9 +816,11 @@ export class AffiliatesService {
         amount: amount.toFixed(2),
         adminFee: adminFee.toFixed(2),
         netAmount: netAmount.toFixed(2),
-        bankName: profile.bankName,
-        accountNumber: profile.accountNumber,
-        accountHolder: profile.accountHolder,
+        method: payout.method,
+        momoUserId: isCoin ? payout.momoUserId : null,
+        bankName: isCoin ? null : profile.bankName,
+        accountNumber: isCoin ? null : profile.accountNumber,
+        accountHolder: isCoin ? null : profile.accountHolder,
         status: WithdrawalStatus.PENDING,
       });
       await queryRunner.manager.save(withdrawal);
@@ -705,6 +865,10 @@ export class AffiliatesService {
    * done manually outside the system instead). This step only records that
    * an admin has signed off; see markWithdrawalProcessed for the second
    * step once the manual transfer is actually done.
+   *
+   * A momo_coin withdrawal is different: approval sends net_amount coins to
+   * the Momo ID right away and lands on PAID. If the send fails it goes back
+   * to PENDING so the admin can retry or reject (which refunds).
    */
   async approveWithdrawal(
     withdrawalId: string,
@@ -712,16 +876,54 @@ export class AffiliatesService {
   ): Promise<CommissionWithdrawal> {
     const withdrawal = await this.findWithdrawalByIdOrFail(withdrawalId);
 
-    if (withdrawal.status !== WithdrawalStatus.PENDING) {
+    // Conditional update so two concurrent approvals can't both pass the
+    // status check - matters for momo_coin, where approval sends coins.
+    const claimed = await this.withdrawalRepository.update(
+      { id: withdrawalId, status: WithdrawalStatus.PENDING },
+      {
+        status: WithdrawalStatus.APPROVED,
+        approvedBy: adminUserId,
+        approvedAt: new Date(),
+      },
+    );
+    if (!claimed.affected) {
       throw new ConflictException(
         `Withdrawal ${withdrawalId} is not pending (current status: ${withdrawal.status})`,
       );
     }
 
-    withdrawal.status = WithdrawalStatus.APPROVED;
-    withdrawal.approvedBy = adminUserId;
-    withdrawal.approvedAt = new Date();
-    return this.withdrawalRepository.save(withdrawal);
+    if (withdrawal.method === WithdrawalMethod.MOMO_COIN) {
+      const result = await this.provider
+        .injectCoin({
+          productProviderCode: 'AFFILIATE_WITHDRAWAL',
+          targetUserId: withdrawal.momoUserId ?? '',
+          coin: Number(withdrawal.netAmount),
+        })
+        .catch((error: unknown) => ({
+          success: false,
+          response: error instanceof Error ? error.message : String(error),
+        }));
+
+      if (!result.success) {
+        await this.withdrawalRepository.update(withdrawalId, {
+          status: WithdrawalStatus.PENDING,
+          approvedBy: null,
+          approvedAt: null,
+        });
+        throw new BadGatewayException(
+          `Sending Momo coins for withdrawal ${withdrawalId} failed: ${result.response}`,
+        );
+      }
+
+      await this.withdrawalRepository.update(withdrawalId, {
+        status: WithdrawalStatus.PAID,
+        processedBy: adminUserId,
+        processedAt: new Date(),
+        adminNotes: `Momo coin send: ${result.response}`,
+      });
+    }
+
+    return this.findWithdrawalByIdOrFail(withdrawalId);
   }
 
   /**
@@ -774,6 +976,23 @@ export class AffiliatesService {
     await queryRunner.startTransaction();
 
     try {
+      // Conditional, so a concurrent approval (which may be sending Momo
+      // coins) and this refund can't both go through.
+      const claimed = await queryRunner.manager.update(
+        CommissionWithdrawal,
+        { id: withdrawal.id, status: WithdrawalStatus.PENDING },
+        {
+          status: WithdrawalStatus.REJECTED,
+          processedBy: adminUserId,
+          processedAt: new Date(),
+        },
+      );
+      if (!claimed.affected) {
+        throw new ConflictException(
+          `Withdrawal ${withdrawalId} is no longer pending`,
+        );
+      }
+
       const profile = await queryRunner.manager.findOne(AffiliatorProfile, {
         where: { id: withdrawal.affiliatorId },
         lock: { mode: 'pessimistic_write' },
@@ -799,12 +1018,6 @@ export class AffiliatesService {
         description: `Refund for rejected withdrawal ${withdrawal.id}`,
       });
       await queryRunner.manager.save(log);
-
-      await queryRunner.manager.update(CommissionWithdrawal, withdrawal.id, {
-        status: WithdrawalStatus.REJECTED,
-        processedBy: adminUserId,
-        processedAt: new Date(),
-      });
 
       await queryRunner.commitTransaction();
     } catch (error) {
@@ -925,6 +1138,7 @@ export class AffiliatesService {
    */
   async findAllProfiles(params: {
     status?: UserStatus;
+    adminProfileId?: string;
     search?: string;
     limit: number;
     offset: number;
@@ -932,12 +1146,22 @@ export class AffiliatesService {
     const qb = this.profileRepository
       .createQueryBuilder('profile')
       .leftJoinAndSelect('profile.user', 'user')
+      .leftJoinAndSelect('profile.adminProfile', 'adminProfile')
+      .leftJoinAndSelect('adminProfile.user', 'adminUser')
+      .withDeleted()
+      .andWhere('profile.deletedAt IS NULL')
       .orderBy('profile.createdAt', 'DESC')
       .take(params.limit)
       .skip(params.offset);
 
     if (params.status) {
       qb.andWhere('user.status = :status', { status: params.status });
+    }
+
+    if (params.adminProfileId) {
+      qb.andWhere('profile.adminProfileId = :adminProfileId', {
+        adminProfileId: params.adminProfileId,
+      });
     }
 
     if (params.search) {
@@ -951,8 +1175,65 @@ export class AffiliatesService {
     return { items, total };
   }
 
+  /**
+   * Per-affiliate referral sales in a date range (both ends inclusive,
+   * YYYY-MM-DD, either optional): paid referred transactions, their gross
+   * amount and the commission credited. Read from commission credit logs
+   * rather than transactions.referral_code so sales made under an
+   * affiliate's older referral code still count. Dated by when the
+   * commission was credited, i.e. when the paid transaction was fulfilled.
+   */
+  async getPeriodStats(
+    profileIds: string[],
+    period: { dateFrom?: string; dateTo?: string },
+  ): Promise<
+    Map<
+      string,
+      { transactionCount: number; grossAmount: string; commission: string }
+    >
+  > {
+    if (profileIds.length === 0) return new Map();
+    const qb = this.commissionLogRepository
+      .createQueryBuilder('log')
+      .innerJoin(Transaction, 't', 't.id = log.transaction_id')
+      .select('log.affiliator_id', 'affiliator_id')
+      .addSelect('COUNT(*)', 'transaction_count')
+      .addSelect('COALESCE(SUM(t.gross_amount), 0)', 'gross_amount')
+      .addSelect('COALESCE(SUM(log.amount), 0)', 'commission')
+      .where('log.type = :type', { type: CommissionLogType.CREDIT })
+      .andWhere('log.affiliator_id IN (:...ids)', { ids: profileIds })
+      .groupBy('log.affiliator_id');
+    if (period.dateFrom) {
+      qb.andWhere('log.created_at >= :dateFrom::date', {
+        dateFrom: period.dateFrom,
+      });
+    }
+    if (period.dateTo) {
+      qb.andWhere("log.created_at < (:dateTo::date + interval '1 day')", {
+        dateTo: period.dateTo,
+      });
+    }
+    const rows: {
+      affiliator_id: string;
+      transaction_count: string;
+      gross_amount: string;
+      commission: string;
+    }[] = await qb.getRawMany();
+    return new Map(
+      rows.map((row) => [
+        String(row.affiliator_id),
+        {
+          transactionCount: Number(row.transaction_count),
+          grossAmount: Number(row.gross_amount).toFixed(2),
+          commission: Number(row.commission).toFixed(2),
+        },
+      ]),
+    );
+  }
+
   async findAllWithdrawals(params: {
     status?: WithdrawalStatus;
+    method?: WithdrawalMethod;
     search?: string;
     limit: number;
     offset: number;
@@ -969,6 +1250,10 @@ export class AffiliatesService {
       qb.andWhere('withdrawal.status = :status', { status: params.status });
     }
 
+    if (params.method) {
+      qb.andWhere('withdrawal.method = :method', { method: params.method });
+    }
+
     if (params.search) {
       qb.andWhere('(user.name ILIKE :search OR user.email ILIKE :search)', {
         search: `%${params.search}%`,
@@ -978,4 +1263,15 @@ export class AffiliatesService {
     const [items, total] = await qb.getManyAndCount();
     return { items, total };
   }
+}
+
+/** The admin an affiliate registered under (via their referral code), or null. */
+export function toLinkedAdmin(admin: AdminProfile | null | undefined) {
+  if (!admin) return null;
+  return {
+    admin_profile_id: admin.id,
+    name: admin.user?.name ?? null,
+    referral_code: admin.referralCode,
+    deleted: admin.deletedAt !== null,
+  };
 }

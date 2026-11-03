@@ -47,7 +47,7 @@ export class TopupController {
   @Get('estimate')
   @ApiOperation({
     summary:
-      "Calculator for the adjustable-amount checkout form: pass exactly one of `amount` or `coin` (both are aliases for the same nominal rupiah paid - coin and rupiah are the same number by design, there is no reverse/target calculation). Returns amount, coin_amount (base + bonus tier, if the nominal qualifies), and bonus_coin. Uses the exact same formula checkout-custom charges, so this preview never drifts out of sync.",
+      'Calculator for the adjustable-amount checkout form: pass exactly one of `amount` or `coin` (both are aliases for the same nominal rupiah paid - coin and rupiah are the same number by design, there is no reverse/target calculation). Returns amount, coin_amount (base + bonus tier, if the nominal qualifies, + 0.7% extra coin), bonus_coin and extra_coin. Uses the exact same formula checkout-custom charges, so this preview never drifts out of sync.',
   })
   async estimateCustomAmount(@Query() dto: EstimateCustomAmountDto) {
     const data = await this.topupService.estimateCustomAmount(dto);
@@ -57,7 +57,7 @@ export class TopupController {
   @Post('checkout-custom')
   @ApiOperation({
     summary:
-      "Start a purchase with a customer-typed rupiah nominal (`amount`) instead of a fixed product (minimum Rp 10,000) - never send coin directly, the backend computes it. Coin payout = amount (1:1) plus the published bonus tier for amounts >= Rp 350,000 (see custom-amount-pricing.util.ts), minus the admin-configured custom_amount_margin_rate (0% by default). Response includes coin_amount (final total) and bonus_coin (the tier bonus alone, for display) separately.",
+      'Start a purchase with a customer-typed rupiah nominal (`amount`) instead of a fixed product (minimum Rp 10,000) - never send coin directly, the backend computes it. Coin payout = amount (1:1) plus the published bonus tier for amounts >= Rp 350,000 plus an extra 0.7% of the amount (see custom-amount-pricing.util.ts), minus the admin-configured custom_amount_margin_rate (0% by default). Response includes coin_amount (final total, what gets sent once LinkQu confirms payment), bonus_coin (tier bonus) and extra_coin (the 0.7%) separately.',
   })
   async checkoutCustomAmount(@Body() dto: CheckoutCustomAmountDto) {
     const data = await this.topupService.checkoutCustomAmount(dto);

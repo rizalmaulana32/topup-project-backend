@@ -1,6 +1,7 @@
 import {
   Column,
   CreateDateColumn,
+  DeleteDateColumn,
   Entity,
   JoinColumn,
   OneToOne,
@@ -49,6 +50,22 @@ export class AdminProfile {
   @Column({ name: 'created_by', type: 'bigint' })
   createdBy: string;
 
+  /**
+   * Entered by a new affiliate at registration to link them to this admin
+   * (AffiliatorProfile.adminProfileId). Not a checkout code - no discount or
+   * commission.
+   */
+  @Column({
+    name: 'referral_code',
+    type: 'varchar',
+    unique: true,
+    nullable: true,
+  })
+  referralCode: string | null;
+
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
+
+  @DeleteDateColumn({ name: 'deleted_at' })
+  deletedAt: Date | null;
 }
