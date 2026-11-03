@@ -33,6 +33,11 @@ export class UpdateSettingsDto {
   customer_discount_min_amount?: number;
 
   @IsOptional()
+  @IsNumber()
+  @Min(0)
+  withdrawal_admin_fee?: number;
+
+  @IsOptional()
   @IsString()
   @IsNotEmpty()
   admin_bank_name?: string;

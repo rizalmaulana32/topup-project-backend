@@ -257,14 +257,79 @@ describe('Commission crediting and withdrawal (e2e)', () => {
       .expect(201);
 
     const body = response.body as {
-      data: { withdrawal_id: string; status: string };
+      data: {
+        withdrawal_id: string;
+        status: string;
+        admin_fee: string;
+        net_amount: string;
+      };
     };
     expect(body.data.status).toBe(WithdrawalStatus.PENDING);
+    expect(body.data.admin_fee).toBe('0.00');
+    expect(body.data.net_amount).toBe('100000.00');
 
     const profile = await profileRepository.findOneOrFail({
       where: { id: affiliateProfileId },
     });
     expect(profile.commissionBalance).toBe('100000.00');
+  });
+
+  it('deducts the configured withdrawal admin fee from net_amount, not from the locked balance', async () => {
+    await request(app.getHttpServer())
+      .patch('/api/v1/admin/settings')
+      .set('Authorization', `Bearer ${superadminToken}`)
+      .send({ withdrawal_admin_fee: 5000 })
+      .expect(200);
+
+    const balanceBefore = await profileRepository.findOneOrFail({
+      where: { id: affiliateProfileId },
+    });
+
+    const response = await request(app.getHttpServer())
+      .post('/api/v1/affiliate/withdraw')
+      .set('Authorization', `Bearer ${affiliateToken}`)
+      .send({ amount: 20000 })
+      .expect(201);
+
+    const body = response.body as {
+      data: { withdrawal_id: string; admin_fee: string; net_amount: string };
+    };
+    expect(body.data.admin_fee).toBe('5000.00');
+    expect(body.data.net_amount).toBe('15000.00');
+
+    const balanceAfter = await profileRepository.findOneOrFail({
+      where: { id: affiliateProfileId },
+    });
+    // The full requested amount is locked out of the balance, not just the net.
+    expect(Number(balanceAfter.commissionBalance)).toBe(
+      Number(balanceBefore.commissionBalance) - 20000,
+    );
+
+    // A request too small to cover the fee is rejected outright.
+    await request(app.getHttpServer())
+      .post('/api/v1/affiliate/withdraw')
+      .set('Authorization', `Bearer ${affiliateToken}`)
+      .send({ amount: 5000 })
+      .expect(400);
+
+    // Reject + reset the fee so this probe doesn't throw off the exact
+    // balance assertions later tests in this suite depend on.
+    await request(app.getHttpServer())
+      .post(`/api/v1/admin/withdrawals/${body.data.withdrawal_id}/reject`)
+      .set('Authorization', `Bearer ${superadminToken}`)
+      .expect(201);
+    await request(app.getHttpServer())
+      .patch('/api/v1/admin/settings')
+      .set('Authorization', `Bearer ${superadminToken}`)
+      .send({ withdrawal_admin_fee: 0 })
+      .expect(200);
+
+    const balanceRestored = await profileRepository.findOneOrFail({
+      where: { id: affiliateProfileId },
+    });
+    expect(balanceRestored.commissionBalance).toBe(
+      balanceBefore.commissionBalance,
+    );
   });
 
   it('rejects a withdrawal exceeding the available balance', async () => {

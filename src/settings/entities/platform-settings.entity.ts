@@ -81,6 +81,23 @@ export class PlatformSettings {
   customerDiscountMinAmount: string;
 
   /**
+   * Flat Rupiah fee deducted from every affiliate withdrawal payout
+   * (client request via Ricky 2026-11-03) - the affiliate's commission
+   * balance is still debited the full requested amount, but only
+   * (amount - withdrawal_admin_fee) is actually owed/transferred to them;
+   * see CommissionWithdrawal.netAmount. Defaults to 0 so existing
+   * withdrawal behavior is unchanged until a superadmin sets it.
+   */
+  @Column({
+    name: 'withdrawal_admin_fee',
+    type: 'decimal',
+    precision: 14,
+    scale: 2,
+    default: 0,
+  })
+  withdrawalAdminFee: string;
+
+  /**
    * The platform's own accumulated revenue (sellingPrice - basePrice -
    * commission paid, credited on every successfully-injected paid
    * transaction — see PlatformService.creditRevenueForTransaction),

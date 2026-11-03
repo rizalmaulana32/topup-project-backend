@@ -111,6 +111,8 @@ export class AffiliatesController {
       data: {
         withdrawal_id: withdrawal.id,
         amount: withdrawal.amount,
+        admin_fee: withdrawal.adminFee,
+        net_amount: withdrawal.netAmount,
         status: withdrawal.status,
         message:
           'Pengajuan penarikan berhasil dibuat. Menunggu konfirmasi Superadmin.',

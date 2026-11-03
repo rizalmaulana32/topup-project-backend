@@ -37,6 +37,14 @@ export class CommissionWithdrawal {
   @Column({ type: 'decimal', precision: 14, scale: 2 })
   amount: string;
 
+  /** Flat withdrawal admin fee snapshotted at request time (platform_settings.withdrawal_admin_fee at that moment). */
+  @Column({ name: 'admin_fee', type: 'decimal', precision: 14, scale: 2, default: 0 })
+  adminFee: string;
+
+  /** What the affiliate actually gets transferred - amount minus admin_fee. */
+  @Column({ name: 'net_amount', type: 'decimal', precision: 14, scale: 2 })
+  netAmount: string;
+
   @Column({ name: 'bank_name' })
   bankName: string;
 

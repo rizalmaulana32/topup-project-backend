@@ -197,6 +197,8 @@ export class AffiliatesService {
       withdrawals: withdrawals.map((withdrawal) => ({
         withdrawal_id: withdrawal.id,
         amount: withdrawal.amount,
+        admin_fee: withdrawal.adminFee,
+        net_amount: withdrawal.netAmount,
         status: withdrawal.status,
         created_at: withdrawal.createdAt,
       })),
@@ -637,6 +639,14 @@ export class AffiliatesService {
         );
       }
 
+      const adminFee = Number(settings.withdrawalAdminFee);
+      const netAmount = amount - adminFee;
+      if (netAmount <= 0) {
+        throw new BadRequestException(
+          `Requested amount (${amount}) does not cover the withdrawal admin fee (${adminFee}).`,
+        );
+      }
+
       const newBalance = balance - amount;
       await queryRunner.manager.update(AffiliatorProfile, profile.id, {
         commissionBalance: newBalance.toFixed(2),
@@ -646,6 +656,8 @@ export class AffiliatesService {
         id: generateOrderId('WDW'),
         affiliatorId: profile.id,
         amount: amount.toFixed(2),
+        adminFee: adminFee.toFixed(2),
+        netAmount: netAmount.toFixed(2),
         bankName: profile.bankName,
         accountNumber: profile.accountNumber,
         accountHolder: profile.accountHolder,

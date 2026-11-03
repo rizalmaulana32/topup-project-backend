@@ -170,6 +170,7 @@ describe('Admin (e2e)', () => {
         custom_amount_margin_rate: string;
         customer_discount_rate: string;
         customer_discount_min_amount: string;
+        withdrawal_admin_fee: string;
       };
     };
     expect(body.data.global_commission_rate).toBe('10.00');
@@ -177,6 +178,7 @@ describe('Admin (e2e)', () => {
     expect(body.data.custom_amount_margin_rate).toBe('0.00');
     expect(body.data.customer_discount_rate).toBe('0.00');
     expect(body.data.customer_discount_min_amount).toBe('350000.00');
+    expect(body.data.withdrawal_admin_fee).toBe('0.00');
   });
 
   it('updates platform settings, including the adjustable-checkout margin rate', async () => {
@@ -189,6 +191,7 @@ describe('Admin (e2e)', () => {
         custom_amount_margin_rate: 15,
         customer_discount_rate: 1,
         customer_discount_min_amount: 300000,
+        withdrawal_admin_fee: 5000,
       })
       .expect(200);
 
@@ -199,6 +202,7 @@ describe('Admin (e2e)', () => {
         custom_amount_margin_rate: string;
         customer_discount_rate: string;
         customer_discount_min_amount: string;
+        withdrawal_admin_fee: string;
       };
     };
     expect(body.data.global_commission_rate).toBe('12.00');
@@ -206,6 +210,7 @@ describe('Admin (e2e)', () => {
     expect(body.data.custom_amount_margin_rate).toBe('15.00');
     expect(body.data.customer_discount_rate).toBe('1.00');
     expect(body.data.customer_discount_min_amount).toBe('300000.00');
+    expect(body.data.withdrawal_admin_fee).toBe('5000.00');
 
     // Reset so later tests in this file (and other suites sharing global
     // settings semantics) aren't affected by this probe value.
@@ -218,6 +223,7 @@ describe('Admin (e2e)', () => {
         custom_amount_margin_rate: 0,
         customer_discount_rate: 0,
         customer_discount_min_amount: 350000,
+        withdrawal_admin_fee: 0,
       })
       .expect(200);
   });
