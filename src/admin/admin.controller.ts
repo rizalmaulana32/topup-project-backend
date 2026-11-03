@@ -46,6 +46,7 @@ import { ListTransactionsDto } from './dto/list-transactions.dto';
 import { ListWithdrawalsDto } from './dto/list-withdrawals.dto';
 import { PlatformWithdrawDto } from '../platform/dto/platform-withdraw.dto';
 import { ProcessWithdrawalDto } from './dto/process-withdrawal.dto';
+import { UpdateReferralCodeDto } from './dto/update-referral-code.dto';
 import { ProviderCoinTransferDto } from './dto/provider-coin-transfer.dto';
 import { ResetAffiliatePasswordDto } from './dto/reset-affiliate-password.dto';
 import { SetTieredCommissionDto } from './dto/set-tiered-commission.dto';
@@ -147,6 +148,33 @@ export class AdminController {
         profile_id: profile.id,
         affiliate_code: profile.affiliateCode,
         approved_at: profile.approvedAt,
+      },
+    };
+  }
+
+  @Patch('affiliates/:id/referral-code')
+  @ApiOperation({
+    summary:
+      "Change an affiliate's referral code directly, without affecting approval status/date (unlike POST .../approve, which would overwrite approved_by/approved_at)",
+  })
+  @ApiParam({
+    name: 'id',
+    description:
+      'The affiliate PROFILE ID (not user_id) - see profile_id in the GET /admin/affiliates response, listed side by side with user_id.',
+  })
+  async updateAffiliateReferralCode(
+    @Param('id') id: string,
+    @Body() dto: UpdateReferralCodeDto,
+  ) {
+    const profile = await this.affiliatesService.updateReferralCode(
+      id,
+      dto.referral_code,
+    );
+    return {
+      success: true,
+      data: {
+        profile_id: profile.id,
+        affiliate_code: profile.affiliateCode,
       },
     };
   }

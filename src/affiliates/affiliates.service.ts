@@ -241,6 +241,32 @@ export class AffiliatesService {
     return this.findProfileByIdOrFail(profileId);
   }
 
+  /**
+   * Changes an affiliate's referral code without touching approval state
+   * (approved_by/approved_at) or account status - unlike reusing approve()
+   * for this, which would silently overwrite the original approval
+   * timestamp/admin every time someone just wants to edit the code.
+   */
+  async updateReferralCode(
+    profileId: string,
+    newCode: string,
+  ): Promise<AffiliatorProfile> {
+    const profile = await this.findProfileByIdOrFail(profileId);
+
+    const existing = await this.profileRepository.findOne({
+      where: { affiliateCode: newCode },
+    });
+    if (existing && existing.id !== profile.id) {
+      throw new ConflictException(
+        `Referral code ${newCode} is already in use`,
+      );
+    }
+
+    profile.affiliateCode = newCode;
+    await this.profileRepository.save(profile);
+    return profile;
+  }
+
   async reject(profileId: string): Promise<void> {
     const profile = await this.findProfileByIdOrFail(profileId);
     await this.usersService.updateStatus(profile.userId, UserStatus.INACTIVE);

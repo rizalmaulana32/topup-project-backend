@@ -262,6 +262,47 @@ describe('Admin (e2e)', () => {
       .expect(409);
   });
 
+  it("edits an already-approved affiliate's referral code without touching approved_at", async () => {
+    const profileId = await registerPendingAffiliate('edit-code.e2e@example.com');
+    await request(app.getHttpServer())
+      .post(`/api/v1/admin/affiliates/${profileId}/approve`)
+      .set('Authorization', `Bearer ${superadminToken}`)
+      .expect(201);
+
+    const profileBefore = await profileRepository.findOneOrFail({
+      where: { id: profileId },
+    });
+
+    const response = await request(app.getHttpServer())
+      .patch(`/api/v1/admin/affiliates/${profileId}/referral-code`)
+      .set('Authorization', `Bearer ${superadminToken}`)
+      .send({ referral_code: 'YAY-EDITED1' })
+      .expect(200);
+
+    const body = response.body as { data: { affiliate_code: string } };
+    expect(body.data.affiliate_code).toBe('YAY-EDITED1');
+
+    const profileAfter = await profileRepository.findOneOrFail({
+      where: { id: profileId },
+    });
+    expect(profileAfter.approvedAt).toEqual(profileBefore.approvedAt);
+    expect(profileAfter.approvedBy).toEqual(profileBefore.approvedBy);
+  });
+
+  it('rejects editing a referral code to one already used by another affiliate', async () => {
+    const profileId = await registerPendingAffiliate('edit-code-2.e2e@example.com');
+    await request(app.getHttpServer())
+      .post(`/api/v1/admin/affiliates/${profileId}/approve`)
+      .set('Authorization', `Bearer ${superadminToken}`)
+      .expect(201);
+
+    await request(app.getHttpServer())
+      .patch(`/api/v1/admin/affiliates/${profileId}/referral-code`)
+      .set('Authorization', `Bearer ${superadminToken}`)
+      .send({ referral_code: 'YAY-EDITED1' })
+      .expect(409);
+  });
+
   it('returns full affiliate detail including phone_number captured at registration', async () => {
     const response = await request(app.getHttpServer())
       .get(`/api/v1/admin/affiliates/${pendingAffiliateProfileId}`)
