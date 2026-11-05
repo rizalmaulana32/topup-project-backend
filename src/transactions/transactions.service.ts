@@ -21,6 +21,7 @@ interface CreatePendingTransactionParams {
 
 interface CreatePendingCustomAmountTransactionParams {
   grossAmount: string;
+  customerDiscountAmount?: string;
   coinAmount: string;
   costBasis: string;
   targetUserId: string;
@@ -63,6 +64,7 @@ export class TransactionsService {
       targetZoneId: params.targetZoneId ?? null,
       referralCode: params.referralCode ?? null,
       grossAmount: params.grossAmount,
+      customerDiscountAmount: params.customerDiscountAmount ?? '0.00',
       coinAmount: params.coinAmount,
       costBasis: params.costBasis,
       paymentStatus: PaymentStatus.PENDING,

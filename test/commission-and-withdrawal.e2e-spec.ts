@@ -605,6 +605,62 @@ describe('Commission crediting and withdrawal (e2e)', () => {
       .expect(200);
   });
 
+  it('splits commission with an upfront customer discount on a referred custom-amount top-up too (2026-11-05 client report: this path had no discount at all)', async () => {
+    await request(app.getHttpServer())
+      .patch('/api/v1/admin/settings')
+      .set('Authorization', `Bearer ${superadminToken}`)
+      .send({ customer_discount_rate: 2 })
+      .expect(200);
+
+    const checkoutResponse = await request(app.getHttpServer())
+      .post('/api/v1/topup/checkout-custom')
+      .send({
+        amount: 400000,
+        target_user_id: '13572468',
+        affiliate_code: affiliateCode,
+      })
+      .expect(201);
+    const checkoutBody = checkoutResponse.body as {
+      data: { transaction_id: string };
+    };
+    const transactionId = checkoutBody.data.transaction_id;
+
+    // 400000 * 2% = 8000 discount -> charged 392000. Coin delivered is
+    // still based on the full 400000 (+ its 4000 published bonus tier +
+    // its 2800 extra-coin compensation, i.e. unaffected by the discount).
+    const pendingTransaction = await transactionRepository.findOneOrFail({
+      where: { id: transactionId },
+    });
+    expect(pendingTransaction.grossAmount).toBe('392000.00');
+    expect(pendingTransaction.customerDiscountAmount).toBe('8000.00');
+    expect(pendingTransaction.coinAmount).toBe('406800.00');
+
+    await request(app.getHttpServer())
+      .post('/api/v1/webhooks/linkqu/payment')
+      .send({
+        partner_reff: transactionId,
+        amount: 392000,
+        va_number: '7136490000031689',
+        username: 'LI307GXIN',
+        status: 'SUCCESS',
+        signature: TEST_SIGNATURE,
+      })
+      .expect(200);
+
+    // Full commission would be 400000 * 10% = 40000; the 8000 discount
+    // comes straight out of that, leaving the affiliate 32000.
+    const paidTransaction = await transactionRepository.findOneOrFail({
+      where: { id: transactionId },
+    });
+    expect(paidTransaction.affiliateCommission).toBe('32000.00');
+
+    await request(app.getHttpServer())
+      .patch('/api/v1/admin/settings')
+      .set('Authorization', `Bearer ${superadminToken}`)
+      .send({ customer_discount_rate: 0 })
+      .expect(200);
+  });
+
   it('applies the 1%/5% volume tier once opted in, not retroactive to earlier transactions this month', async () => {
     await request(app.getHttpServer())
       .patch(`/api/v1/admin/affiliates/${affiliateProfileId}/tiered-commission`)

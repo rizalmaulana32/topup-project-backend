@@ -446,7 +446,8 @@ describe('TopupService', () => {
       expect(
         transactionsService.createPendingCustomAmount,
       ).toHaveBeenCalledWith({
-        grossAmount: '25000',
+        grossAmount: '25000.00',
+        customerDiscountAmount: '0.00',
         coinAmount: '25175',
         costBasis: '25175',
         targetUserId: '1',
@@ -514,6 +515,83 @@ describe('TopupService', () => {
         transactionsService.createPendingCustomAmount,
       ).toHaveBeenCalledWith(
         expect.objectContaining({ coinAmount: '8056', costBasis: '8056' }),
+      );
+    });
+
+    it('splits commission with an upfront customer discount, same as the fixed-catalog checkout (2026-11-05 client report: a referred custom-amount top-up was crediting the full commission rate with no discount at all)', async () => {
+      checkCodeValidityMock.mockResolvedValue({
+        valid: true,
+        affiliateName: 'Hanabi',
+      });
+      settingsService.get.mockResolvedValue({
+        customAmountMarginRate: '0',
+        customerDiscountRate: '1',
+        customerDiscountMinAmount: '350000',
+      } as any);
+      transactionsService.createPendingCustomAmount.mockResolvedValue({
+        id: 'TRX-20261105-0001',
+      } as any);
+      linkQuService.createInvoice.mockResolvedValue({
+        invoiceId: '900',
+        invoiceUrl: 'https://cognos.linkqu.id/pay/custom-amount-discount',
+        status: '00',
+      });
+
+      await service.checkoutCustomAmount({
+        amount: 350000,
+        target_user_id: '1',
+        affiliate_code: 'HANABI',
+      });
+
+      // 350000 * 1% = 3500 discount -> charged 346500; coin delivered is
+      // still based on the full 350000 (+ its 3500 published bonus tier +
+      // its 2450 extra-coin compensation, i.e. unaffected by the discount).
+      expect(
+        transactionsService.createPendingCustomAmount,
+      ).toHaveBeenCalledWith(
+        expect.objectContaining({
+          grossAmount: '346500.00',
+          customerDiscountAmount: '3500.00',
+          coinAmount: '355950',
+        }),
+      );
+      expect(linkQuService.createInvoice).toHaveBeenCalledWith(
+        expect.objectContaining({ amount: 346500 }),
+      );
+    });
+
+    it('does not discount a referred custom-amount top-up below the minimum', async () => {
+      checkCodeValidityMock.mockResolvedValue({
+        valid: true,
+        affiliateName: 'Hanabi',
+      });
+      settingsService.get.mockResolvedValue({
+        customAmountMarginRate: '0',
+        customerDiscountRate: '1',
+        customerDiscountMinAmount: '350000',
+      } as any);
+      transactionsService.createPendingCustomAmount.mockResolvedValue({
+        id: 'TRX-20261105-0002',
+      } as any);
+      linkQuService.createInvoice.mockResolvedValue({
+        invoiceId: '901',
+        invoiceUrl: 'https://cognos.linkqu.id/pay/custom-amount-no-discount',
+        status: '00',
+      });
+
+      await service.checkoutCustomAmount({
+        amount: 100000,
+        target_user_id: '1',
+        affiliate_code: 'HANABI',
+      });
+
+      expect(
+        transactionsService.createPendingCustomAmount,
+      ).toHaveBeenCalledWith(
+        expect.objectContaining({
+          grossAmount: '100000.00',
+          customerDiscountAmount: '0.00',
+        }),
       );
     });
   });

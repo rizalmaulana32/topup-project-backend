@@ -222,9 +222,33 @@ export class TopupService {
       );
     }
 
+    // Same referral-funded upfront discount as the fixed-catalog checkout()
+    // (see its doc comment) - was missing here entirely until 2026-11-05
+    // (client-reported: a referred custom-amount top-up credited the
+    // affiliate the full commission rate with no customer discount at
+    // all). Coin delivered is based on the original dto.amount, not the
+    // discounted charge - the discount only reduces what's invoiced.
+    let chargedAmount = dto.amount;
+    let customerDiscountAmount = '0.00';
+    if (dto.affiliate_code) {
+      const codeCheck = await this.affiliatesService.checkCodeValidity(
+        dto.affiliate_code,
+      );
+      if (codeCheck.valid) {
+        const minAmount = Number(settings.customerDiscountMinAmount);
+        if (dto.amount >= minAmount) {
+          const discountRate = Number(settings.customerDiscountRate);
+          const discount = Math.round(dto.amount * discountRate) / 100;
+          customerDiscountAmount = discount.toFixed(2);
+          chargedAmount = dto.amount - discount;
+        }
+      }
+    }
+
     const transaction =
       await this.transactionsService.createPendingCustomAmount({
-        grossAmount: String(dto.amount),
+        grossAmount: chargedAmount.toFixed(2),
+        customerDiscountAmount,
         coinAmount: String(coinAmount),
         costBasis: String(costBasis),
         targetUserId: dto.target_user_id,
@@ -234,7 +258,7 @@ export class TopupService {
 
     const invoice = await this.linkQuService.createInvoice({
       externalId: transaction.id,
-      amount: dto.amount,
+      amount: chargedAmount,
       description: `Top-up ${coinAmount} coin for ${dto.target_user_id}`,
     });
 
