@@ -464,6 +464,7 @@ describe('TopupService', () => {
         coin_amount: 25175,
         bonus_coin: 0,
         extra_coin: 175,
+        referral_bonus_coin: 0,
         linkqu_reference: '800',
         invoice_url: 'https://cognos.linkqu.id/pay/custom-amount-test',
       });
@@ -518,7 +519,7 @@ describe('TopupService', () => {
       );
     });
 
-    it('splits commission with an upfront customer discount, same as the fixed-catalog checkout (2026-11-05 client report: a referred custom-amount top-up was crediting the full commission rate with no discount at all)', async () => {
+    it('pays the referral discount out as bonus coin funded by the affiliate commission, without reducing what is invoiced to LinkQu (2026-11-05 client correction via Ricky: a referred custom-amount top-up must still invoice the full typed nominal - "aku isi 1jt teko referral kok malah bayar 990" - the bonus belongs to the user as coin, cut out of the affiliate fee, not as a price discount)', async () => {
       checkCodeValidityMock.mockResolvedValue({
         valid: true,
         affiliateName: 'Hanabi',
@@ -537,26 +538,35 @@ describe('TopupService', () => {
         status: '00',
       });
 
-      await service.checkoutCustomAmount({
+      const result = await service.checkoutCustomAmount({
         amount: 350000,
         target_user_id: '1',
         affiliate_code: 'HANABI',
       });
 
-      // 350000 * 1% = 3500 discount -> charged 346500; coin delivered is
-      // still based on the full 350000 (+ its 3500 published bonus tier +
-      // its 2450 extra-coin compensation, i.e. unaffected by the discount).
+      // 350000 * 1% = 3500 referral bonus coin on top of the full 350000
+      // nominal (+ its 3500 published bonus tier + its 2450 extra-coin
+      // compensation) = 359450 coin delivered; LinkQu is still invoiced the
+      // full 350000, and customerDiscountAmount (3500.00) is carried on the
+      // transaction purely to cut the affiliate's commission at payout.
       expect(
         transactionsService.createPendingCustomAmount,
       ).toHaveBeenCalledWith(
         expect.objectContaining({
-          grossAmount: '346500.00',
+          grossAmount: '350000.00',
           customerDiscountAmount: '3500.00',
-          coinAmount: '355950',
+          coinAmount: '359450',
+          costBasis: '359450',
         }),
       );
       expect(linkQuService.createInvoice).toHaveBeenCalledWith(
-        expect.objectContaining({ amount: 346500 }),
+        expect.objectContaining({ amount: 350000 }),
+      );
+      expect(result).toEqual(
+        expect.objectContaining({
+          coin_amount: 359450,
+          referral_bonus_coin: 3500,
+        }),
       );
     });
 
@@ -636,6 +646,43 @@ describe('TopupService', () => {
         baseCost: '22500',
         commissionPaid: '0.00',
         providerFee: '500.00',
+      });
+    });
+
+    it('passes grossAmount directly as originalAmount for a custom-amount transaction (it is already the full, undiscounted invoice - no reconstruction needed, unlike the fixed-catalog path)', async () => {
+      const transaction = {
+        id: 'TRX-20261105-0010',
+        paymentStatus: PaymentStatus.PENDING,
+        targetUserId: '1',
+        targetZoneId: '99',
+        referralCode: 'HANABI',
+        grossAmount: '350000.00',
+        customerDiscountAmount: '3500.00',
+        product: null,
+        coinAmount: '359450',
+        costBasis: '359450',
+      };
+      transactionsService.findByExternalId.mockResolvedValue(
+        transaction as any,
+      );
+      injectCoinMock.mockResolvedValue({
+        success: true,
+        response: '{"mock":true}',
+      });
+      creditCommissionMock.mockResolvedValue('31500.00');
+      linkQuService.checkTransactionStatus.mockResolvedValue({
+        statusCode: 'success',
+        statusMessage: 'SUCCESS',
+        fee: '1000.00',
+      });
+
+      await service.handleInvoicePaid('TRX-20261105-0010');
+
+      expect(creditCommissionMock).toHaveBeenCalledWith({
+        referralCode: 'HANABI',
+        transactionId: 'TRX-20261105-0010',
+        originalAmount: '350000.00',
+        customerDiscountAmount: '3500.00',
       });
     });
 
@@ -776,7 +823,8 @@ describe('TopupService', () => {
       expect(creditCommissionMock).toHaveBeenCalledWith({
         referralCode: 'AFF-ABC123',
         transactionId: 'TRX-20260805-0003',
-        grossAmount: '20000.00',
+        originalAmount: '20000.00',
+        customerDiscountAmount: undefined,
       });
       expect(creditRevenueMock).toHaveBeenCalledWith({
         transactionId: 'TRX-20260805-0003',
@@ -784,6 +832,41 @@ describe('TopupService', () => {
         baseCost: '15000',
         commissionPaid: '2000.00',
         providerFee: '1000.00',
+      });
+    });
+
+    it('reconstructs the pre-discount originalAmount for a fixed-catalog transaction (grossAmount here is already net of the referral discount)', async () => {
+      const transaction = {
+        id: 'TRX-20261105-0011',
+        paymentStatus: PaymentStatus.PENDING,
+        targetUserId: '1',
+        targetZoneId: '99',
+        referralCode: 'AFF-ABC123',
+        grossAmount: '19000.00',
+        customerDiscountAmount: '1000.00',
+        product,
+      };
+      transactionsService.findByExternalId.mockResolvedValue(
+        transaction as any,
+      );
+      injectCoinMock.mockResolvedValue({
+        success: true,
+        response: '{"mock":true}',
+      });
+      creditCommissionMock.mockResolvedValue('2000.00');
+      linkQuService.checkTransactionStatus.mockResolvedValue({
+        statusCode: 'success',
+        statusMessage: 'SUCCESS',
+        fee: '1000.00',
+      });
+
+      await service.handleInvoicePaid('TRX-20261105-0011');
+
+      expect(creditCommissionMock).toHaveBeenCalledWith({
+        referralCode: 'AFF-ABC123',
+        transactionId: 'TRX-20261105-0011',
+        originalAmount: '20000.00',
+        customerDiscountAmount: '1000.00',
       });
     });
 

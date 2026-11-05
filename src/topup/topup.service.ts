@@ -222,14 +222,16 @@ export class TopupService {
       );
     }
 
-    // Same referral-funded upfront discount as the fixed-catalog checkout()
-    // (see its doc comment) - was missing here entirely until 2026-11-05
-    // (client-reported: a referred custom-amount top-up credited the
-    // affiliate the full commission rate with no customer discount at
-    // all). Coin delivered is based on the original dto.amount, not the
-    // discounted charge - the discount only reduces what's invoiced.
-    let chargedAmount = dto.amount;
+    // Referral-funded bonus (client correction 2026-11-05 via Ricky: unlike
+    // the fixed-catalog checkout(), a custom-amount top-up must invoice
+    // LinkQu for the full typed amount - the customer is depositing that
+    // exact nominal, not buying a discounted product. The referral "discount"
+    // here is instead paid out as extra bonus coin (same 1:1 Rupiah->coin
+    // rate as the rest of custom-amount pricing), funded by cutting the
+    // affiliate's commission by that same Rupiah amount - never by
+    // shorting what's actually invoiced/charged.
     let customerDiscountAmount = '0.00';
+    let referralBonusCoin = 0;
     if (dto.affiliate_code) {
       const codeCheck = await this.affiliatesService.checkCodeValidity(
         dto.affiliate_code,
@@ -240,17 +242,24 @@ export class TopupService {
           const discountRate = Number(settings.customerDiscountRate);
           const discount = Math.round(dto.amount * discountRate) / 100;
           customerDiscountAmount = discount.toFixed(2);
-          chargedAmount = dto.amount - discount;
+          referralBonusCoin = Math.floor(discount);
         }
       }
     }
 
+    const finalCoinAmount = coinAmount + referralBonusCoin;
+    // The bonus coin costs the platform real money same as the published
+    // tier bonus does, so it's folded into costBasis the same way -
+    // creditRevenueForTransaction (gross - cost - commission - fee) then
+    // correctly reflects it as an affiliate-funded cost, not platform loss.
+    const finalCostBasis = costBasis + referralBonusCoin;
+
     const transaction =
       await this.transactionsService.createPendingCustomAmount({
-        grossAmount: chargedAmount.toFixed(2),
+        grossAmount: dto.amount.toFixed(2),
         customerDiscountAmount,
-        coinAmount: String(coinAmount),
-        costBasis: String(costBasis),
+        coinAmount: String(finalCoinAmount),
+        costBasis: String(finalCostBasis),
         targetUserId: dto.target_user_id,
         targetZoneId: dto.target_zone_id,
         referralCode: dto.affiliate_code,
@@ -258,8 +267,8 @@ export class TopupService {
 
     const invoice = await this.linkQuService.createInvoice({
       externalId: transaction.id,
-      amount: chargedAmount,
-      description: `Top-up ${coinAmount} coin for ${dto.target_user_id}`,
+      amount: dto.amount,
+      description: `Top-up ${finalCoinAmount} coin for ${dto.target_user_id}`,
     });
 
     await this.transactionsService.attachLinkQuReference(
@@ -269,9 +278,10 @@ export class TopupService {
 
     return {
       transaction_id: transaction.id,
-      coin_amount: coinAmount,
+      coin_amount: finalCoinAmount,
       bonus_coin: bonusCoin,
       extra_coin: extraCoin,
+      referral_bonus_coin: referralBonusCoin,
       linkqu_reference: invoice.invoiceId,
       invoice_url: invoice.invoiceUrl,
     };
@@ -333,11 +343,23 @@ export class TopupService {
     });
 
     if (injectResult.success) {
+      // originalAmount is the pre-discount/pre-bonus value the commission
+      // rate applies to. The fixed-catalog checkout() invoices a
+      // discounted grossAmount, so the original price is recovered by
+      // adding the discount back; the custom-amount checkoutCustomAmount()
+      // invoices the full typed amount already (2026-11-05 correction -
+      // see its doc comment), so grossAmount already IS the original and
+      // needs no reconstruction.
       const commissionPaid = transaction.referralCode
         ? await this.affiliatesService.creditCommissionForTransaction({
             referralCode: transaction.referralCode,
             transactionId: transaction.id,
-            grossAmount: transaction.grossAmount,
+            originalAmount: transaction.product
+              ? (
+                  Number(transaction.grossAmount) +
+                  Number(transaction.customerDiscountAmount ?? 0)
+                ).toFixed(2)
+              : transaction.grossAmount,
             customerDiscountAmount: transaction.customerDiscountAmount,
           })
         : '0.00';

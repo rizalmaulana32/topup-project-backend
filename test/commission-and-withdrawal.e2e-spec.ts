@@ -605,7 +605,7 @@ describe('Commission crediting and withdrawal (e2e)', () => {
       .expect(200);
   });
 
-  it('splits commission with an upfront customer discount on a referred custom-amount top-up too (2026-11-05 client report: this path had no discount at all)', async () => {
+  it('pays the referral discount on a referred custom-amount top-up as bonus coin, funded by the affiliate commission, without reducing what is invoiced to LinkQu (2026-11-05 correction via Ricky: "aku isi 1jt teko referral kok malah bayar 990" - the customer must still be invoiced for the full typed nominal)', async () => {
     await request(app.getHttpServer())
       .patch('/api/v1/admin/settings')
       .set('Authorization', `Bearer ${superadminToken}`)
@@ -621,25 +621,27 @@ describe('Commission crediting and withdrawal (e2e)', () => {
       })
       .expect(201);
     const checkoutBody = checkoutResponse.body as {
-      data: { transaction_id: string };
+      data: { transaction_id: string; referral_bonus_coin: number };
     };
     const transactionId = checkoutBody.data.transaction_id;
+    expect(checkoutBody.data.referral_bonus_coin).toBe(8000);
 
-    // 400000 * 2% = 8000 discount -> charged 392000. Coin delivered is
-    // still based on the full 400000 (+ its 4000 published bonus tier +
-    // its 2800 extra-coin compensation, i.e. unaffected by the discount).
+    // 400000 * 2% = 8000 referral bonus coin on top of the full 400000
+    // nominal (+ its 4000 published bonus tier + its 2800 extra-coin
+    // compensation) = 414800 coin delivered; LinkQu is still invoiced the
+    // full 400000 - the discount never reduces what's charged.
     const pendingTransaction = await transactionRepository.findOneOrFail({
       where: { id: transactionId },
     });
-    expect(pendingTransaction.grossAmount).toBe('392000.00');
+    expect(pendingTransaction.grossAmount).toBe('400000.00');
     expect(pendingTransaction.customerDiscountAmount).toBe('8000.00');
-    expect(pendingTransaction.coinAmount).toBe('406800.00');
+    expect(pendingTransaction.coinAmount).toBe('414800.00');
 
     await request(app.getHttpServer())
       .post('/api/v1/webhooks/linkqu/payment')
       .send({
         partner_reff: transactionId,
-        amount: 392000,
+        amount: 400000,
         va_number: '7136490000031689',
         username: 'LI307GXIN',
         status: 'SUCCESS',
@@ -647,7 +649,7 @@ describe('Commission crediting and withdrawal (e2e)', () => {
       })
       .expect(200);
 
-    // Full commission would be 400000 * 10% = 40000; the 8000 discount
+    // Full commission would be 400000 * 10% = 40000; the 8000 bonus coin
     // comes straight out of that, leaving the affiliate 32000.
     const paidTransaction = await transactionRepository.findOneOrFail({
       where: { id: transactionId },

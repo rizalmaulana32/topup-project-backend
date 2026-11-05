@@ -628,7 +628,7 @@ export class AffiliatesService {
   async creditCommissionForTransaction(params: {
     referralCode: string;
     transactionId: string;
-    grossAmount: string;
+    originalAmount: string;
     customerDiscountAmount?: string;
   }): Promise<string> {
     const queryRunner = this.dataSource.createQueryRunner();
@@ -657,16 +657,16 @@ export class AffiliatesService {
         return '0.00';
       }
 
-      // grossAmount is what was actually charged after any customer
-      // discount, so the discount is added back to recover the original
-      // pre-discount price the commission rate applies to, then the same
-      // discount Rupiah amount is subtracted back out of the commission -
-      // i.e. the customer's cut comes directly out of the affiliate's,
-      // not on top of it. See checkout()'s doc comment for why this
-      // originates at checkout time rather than being re-derived from the
-      // (possibly since-changed) live settings rate here.
+      // originalAmount is the caller-supplied pre-discount/pre-bonus
+      // transaction value the commission rate applies to (see TopupService
+      // .handleInvoicePaid's doc comment for how each checkout path derives
+      // it). The same discount Rupiah amount is then subtracted back out of
+      // the commission - i.e. the customer's cut comes directly out of the
+      // affiliate's, not on top of it. This originates at checkout time
+      // rather than being re-derived from the (possibly since-changed) live
+      // settings rate here.
       const discountAmount = Number(params.customerDiscountAmount ?? 0);
-      const originalAmount = Number(params.grossAmount) + discountAmount;
+      const originalAmount = Number(params.originalAmount);
 
       let effectiveRate = Number(profile.commissionRate);
       let periodUpdate: {
