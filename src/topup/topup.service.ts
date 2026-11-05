@@ -222,44 +222,37 @@ export class TopupService {
       );
     }
 
-    // Referral-funded bonus (client correction 2026-11-05 via Ricky: unlike
-    // the fixed-catalog checkout(), a custom-amount top-up must invoice
-    // LinkQu for the full typed amount - the customer is depositing that
-    // exact nominal, not buying a discounted product. The referral "discount"
-    // here is instead paid out as extra bonus coin (same 1:1 Rupiah->coin
-    // rate as the rest of custom-amount pricing), funded by cutting the
-    // affiliate's commission by that same Rupiah amount - never by
-    // shorting what's actually invoiced/charged.
+    // Referral-funded (client correction 2026-11-05 via Ricky, second
+    // round: "motong oleh e fee ne tok" - the referral code changes
+    // *nothing* for the customer, neither the LinkQu invoice (full
+    // dto.amount, as already fixed) nor the coin they receive (still just
+    // amount + bonusCoin + extraCoin, same as with no code at all). The
+    // only effect is that when a valid code is used, the transaction's own
+    // published tier bonus (bonusCoin) is paid for out of the affiliate's
+    // commission instead of the platform's margin - see his worked example:
+    // "referal e 50.000 dan transaksi ne oleh bonus 20.000, afiliator e
+    // cuman dapat 30.000". extraCoin (the 0.7% LinkQu-fee compensation) is
+    // never part of this deduction - it isn't "the bonus" he means, it's a
+    // fee makeup that applies regardless of referral. Replaces the
+    // settings.customerDiscountRate/MinAmount mechanism entirely for this
+    // checkout path (still used, unchanged, by the fixed-catalog
+    // checkout()).
     let customerDiscountAmount = '0.00';
-    let referralBonusCoin = 0;
     if (dto.affiliate_code) {
       const codeCheck = await this.affiliatesService.checkCodeValidity(
         dto.affiliate_code,
       );
       if (codeCheck.valid) {
-        const minAmount = Number(settings.customerDiscountMinAmount);
-        if (dto.amount >= minAmount) {
-          const discountRate = Number(settings.customerDiscountRate);
-          const discount = Math.round(dto.amount * discountRate) / 100;
-          customerDiscountAmount = discount.toFixed(2);
-          referralBonusCoin = Math.floor(discount);
-        }
+        customerDiscountAmount = bonusCoin.toFixed(2);
       }
     }
-
-    const finalCoinAmount = coinAmount + referralBonusCoin;
-    // The bonus coin costs the platform real money same as the published
-    // tier bonus does, so it's folded into costBasis the same way -
-    // creditRevenueForTransaction (gross - cost - commission - fee) then
-    // correctly reflects it as an affiliate-funded cost, not platform loss.
-    const finalCostBasis = costBasis + referralBonusCoin;
 
     const transaction =
       await this.transactionsService.createPendingCustomAmount({
         grossAmount: dto.amount.toFixed(2),
         customerDiscountAmount,
-        coinAmount: String(finalCoinAmount),
-        costBasis: String(finalCostBasis),
+        coinAmount: String(coinAmount),
+        costBasis: String(costBasis),
         targetUserId: dto.target_user_id,
         targetZoneId: dto.target_zone_id,
         referralCode: dto.affiliate_code,
@@ -268,7 +261,7 @@ export class TopupService {
     const invoice = await this.linkQuService.createInvoice({
       externalId: transaction.id,
       amount: dto.amount,
-      description: `Top-up ${finalCoinAmount} coin for ${dto.target_user_id}`,
+      description: `Top-up ${coinAmount} coin for ${dto.target_user_id}`,
     });
 
     await this.transactionsService.attachLinkQuReference(
@@ -278,10 +271,9 @@ export class TopupService {
 
     return {
       transaction_id: transaction.id,
-      coin_amount: finalCoinAmount,
+      coin_amount: coinAmount,
       bonus_coin: bonusCoin,
       extra_coin: extraCoin,
-      referral_bonus_coin: referralBonusCoin,
       linkqu_reference: invoice.invoiceId,
       invoice_url: invoice.invoiceUrl,
     };

@@ -605,13 +605,7 @@ describe('Commission crediting and withdrawal (e2e)', () => {
       .expect(200);
   });
 
-  it('pays the referral discount on a referred custom-amount top-up as bonus coin, funded by the affiliate commission, without reducing what is invoiced to LinkQu (2026-11-05 correction via Ricky: "aku isi 1jt teko referral kok malah bayar 990" - the customer must still be invoiced for the full typed nominal)', async () => {
-    await request(app.getHttpServer())
-      .patch('/api/v1/admin/settings')
-      .set('Authorization', `Bearer ${superadminToken}`)
-      .send({ customer_discount_rate: 2 })
-      .expect(200);
-
+  it('leaves the customer\'s coin and LinkQu invoice untouched for a referred custom-amount top-up, only cutting the affiliate commission by the transaction\'s own tier bonus (2026-11-05 correction via Ricky, round 2: "motong oleh e fee ne tok" - a referral code changes nothing for the customer, only the affiliate\'s fee absorbs the bonus)', async () => {
     const checkoutResponse = await request(app.getHttpServer())
       .post('/api/v1/topup/checkout-custom')
       .send({
@@ -621,21 +615,21 @@ describe('Commission crediting and withdrawal (e2e)', () => {
       })
       .expect(201);
     const checkoutBody = checkoutResponse.body as {
-      data: { transaction_id: string; referral_bonus_coin: number };
+      data: { transaction_id: string };
     };
     const transactionId = checkoutBody.data.transaction_id;
-    expect(checkoutBody.data.referral_bonus_coin).toBe(8000);
 
-    // 400000 * 2% = 8000 referral bonus coin on top of the full 400000
-    // nominal (+ its 4000 published bonus tier + its 2800 extra-coin
-    // compensation) = 414800 coin delivered; LinkQu is still invoiced the
-    // full 400000 - the discount never reduces what's charged.
+    // Coin delivered (406800 = 400000 + 4000 published bonus tier + 2800
+    // extra-coin) and the LinkQu invoice (400000) are exactly what a
+    // non-referred checkout of the same amount would get.
+    // customerDiscountAmount is set to the 4000 tier bonus purely to cut
+    // the affiliate's commission at payout.
     const pendingTransaction = await transactionRepository.findOneOrFail({
       where: { id: transactionId },
     });
     expect(pendingTransaction.grossAmount).toBe('400000.00');
-    expect(pendingTransaction.customerDiscountAmount).toBe('8000.00');
-    expect(pendingTransaction.coinAmount).toBe('414800.00');
+    expect(pendingTransaction.customerDiscountAmount).toBe('4000.00');
+    expect(pendingTransaction.coinAmount).toBe('406800.00');
 
     await request(app.getHttpServer())
       .post('/api/v1/webhooks/linkqu/payment')
@@ -649,18 +643,12 @@ describe('Commission crediting and withdrawal (e2e)', () => {
       })
       .expect(200);
 
-    // Full commission would be 400000 * 10% = 40000; the 8000 bonus coin
-    // comes straight out of that, leaving the affiliate 32000.
+    // Full commission would be 400000 * 10% = 40000; the 4000 tier bonus
+    // comes straight out of that, leaving the affiliate 36000.
     const paidTransaction = await transactionRepository.findOneOrFail({
       where: { id: transactionId },
     });
-    expect(paidTransaction.affiliateCommission).toBe('32000.00');
-
-    await request(app.getHttpServer())
-      .patch('/api/v1/admin/settings')
-      .set('Authorization', `Bearer ${superadminToken}`)
-      .send({ customer_discount_rate: 0 })
-      .expect(200);
+    expect(paidTransaction.affiliateCommission).toBe('36000.00');
   });
 
   it('applies the 1%/5% volume tier once opted in, not retroactive to earlier transactions this month', async () => {

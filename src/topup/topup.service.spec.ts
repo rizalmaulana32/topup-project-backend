@@ -464,7 +464,6 @@ describe('TopupService', () => {
         coin_amount: 25175,
         bonus_coin: 0,
         extra_coin: 175,
-        referral_bonus_coin: 0,
         linkqu_reference: '800',
         invoice_url: 'https://cognos.linkqu.id/pay/custom-amount-test',
       });
@@ -519,15 +518,13 @@ describe('TopupService', () => {
       );
     });
 
-    it('pays the referral discount out as bonus coin funded by the affiliate commission, without reducing what is invoiced to LinkQu (2026-11-05 client correction via Ricky: a referred custom-amount top-up must still invoice the full typed nominal - "aku isi 1jt teko referral kok malah bayar 990" - the bonus belongs to the user as coin, cut out of the affiliate fee, not as a price discount)', async () => {
+    it('leaves the customer\'s coin and LinkQu invoice untouched for a referred custom-amount top-up, only marking the transaction\'s published tier bonus for deduction from the affiliate commission (2026-11-05 client correction via Ricky, round 2: "motong oleh e fee ne tok" - a referral code changes nothing for the customer; only the affiliate\'s fee absorbs the transaction\'s bonus)', async () => {
       checkCodeValidityMock.mockResolvedValue({
         valid: true,
         affiliateName: 'Hanabi',
       });
       settingsService.get.mockResolvedValue({
         customAmountMarginRate: '0',
-        customerDiscountRate: '1',
-        customerDiscountMinAmount: '350000',
       } as any);
       transactionsService.createPendingCustomAmount.mockResolvedValue({
         id: 'TRX-20261105-0001',
@@ -544,19 +541,20 @@ describe('TopupService', () => {
         affiliate_code: 'HANABI',
       });
 
-      // 350000 * 1% = 3500 referral bonus coin on top of the full 350000
-      // nominal (+ its 3500 published bonus tier + its 2450 extra-coin
-      // compensation) = 359450 coin delivered; LinkQu is still invoiced the
-      // full 350000, and customerDiscountAmount (3500.00) is carried on the
-      // transaction purely to cut the affiliate's commission at payout.
+      // Coin delivered (355950 = 350000 + 3500 published bonus tier + 2450
+      // extra-coin) and the LinkQu invoice (350000) are exactly what a
+      // non-referred checkout of the same amount would get. The only
+      // referral effect: customerDiscountAmount is set to the 3500 tier
+      // bonus, purely to cut the affiliate's commission by that much at
+      // payout - extraCoin is never part of that deduction.
       expect(
         transactionsService.createPendingCustomAmount,
       ).toHaveBeenCalledWith(
         expect.objectContaining({
           grossAmount: '350000.00',
           customerDiscountAmount: '3500.00',
-          coinAmount: '359450',
-          costBasis: '359450',
+          coinAmount: '355950',
+          costBasis: '355950',
         }),
       );
       expect(linkQuService.createInvoice).toHaveBeenCalledWith(
@@ -564,21 +562,20 @@ describe('TopupService', () => {
       );
       expect(result).toEqual(
         expect.objectContaining({
-          coin_amount: 359450,
-          referral_bonus_coin: 3500,
+          coin_amount: 355950,
+          bonus_coin: 3500,
+          extra_coin: 2450,
         }),
       );
     });
 
-    it('does not discount a referred custom-amount top-up below the minimum', async () => {
+    it('marks no commission deduction for a referred top-up below the lowest bonus tier (bonusCoin is naturally 0, same floor the tier table already applies with no referral code)', async () => {
       checkCodeValidityMock.mockResolvedValue({
         valid: true,
         affiliateName: 'Hanabi',
       });
       settingsService.get.mockResolvedValue({
         customAmountMarginRate: '0',
-        customerDiscountRate: '1',
-        customerDiscountMinAmount: '350000',
       } as any);
       transactionsService.createPendingCustomAmount.mockResolvedValue({
         id: 'TRX-20261105-0002',
