@@ -28,6 +28,7 @@ export class SettingsService {
     globalCommissionRate?: number;
     minimumWithdrawalAmount?: number;
     customAmountMarginRate?: number;
+    customAmountExtraCoinEnabled?: boolean;
     customerDiscountRate?: number;
     customerDiscountMinAmount?: number;
     withdrawalAdminFee?: number;
@@ -47,6 +48,10 @@ export class SettingsService {
     if (params.customAmountMarginRate !== undefined) {
       current.customAmountMarginRate =
         params.customAmountMarginRate.toFixed(2);
+    }
+    if (params.customAmountExtraCoinEnabled !== undefined) {
+      current.customAmountExtraCoinEnabled =
+        params.customAmountExtraCoinEnabled;
     }
     if (params.customerDiscountRate !== undefined) {
       current.customerDiscountRate = params.customerDiscountRate.toFixed(2);

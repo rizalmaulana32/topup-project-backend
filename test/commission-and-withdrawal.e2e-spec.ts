@@ -547,95 +547,35 @@ describe('Commission crediting and withdrawal (e2e)', () => {
       .expect(401);
   });
 
-  // Placed last: mutates global settings (customer_discount_rate) and
-  // credits more commission to the shared affiliate profile, which would
-  // throw off every balance assertion earlier in this suite if run out of
-  // order.
-  it('splits commission with an upfront customer discount when one is configured', async () => {
-    await request(app.getHttpServer())
-      .patch('/api/v1/admin/settings')
-      .set('Authorization', `Bearer ${superadminToken}`)
-      .send({ customer_discount_rate: 2 })
-      .expect(200);
-
-    const checkoutResponse = await request(app.getHttpServer())
-      .post('/api/v1/topup/checkout')
-      .send({
-        product_id: product.id,
-        target_user_id: '87654321',
-        affiliate_code: affiliateCode,
-      })
-      .expect(201);
-    const checkoutBody = checkoutResponse.body as {
-      data: { transaction_id: string };
-    };
-    const transactionId = checkoutBody.data.transaction_id;
-
-    // sellingPrice 2000000 * 2% = 40000 discount -> charged 1960000.
-    const pendingTransaction = await transactionRepository.findOneOrFail({
-      where: { id: transactionId },
-    });
-    expect(pendingTransaction.grossAmount).toBe('1960000.00');
-    expect(pendingTransaction.customerDiscountAmount).toBe('40000.00');
-
-    await request(app.getHttpServer())
-      .post('/api/v1/webhooks/linkqu/payment')
-      .send({
-        partner_reff: transactionId,
-        amount: 1960000,
-        va_number: '7136490000031689',
-        username: 'LI307GXIN',
-        status: 'SUCCESS',
-        signature: TEST_SIGNATURE,
-      })
-      .expect(200);
-
-    // Full commission would be 2000000 * 10% = 200000; the 40000 discount
-    // comes straight out of that, leaving the affiliate 160000 - not the
-    // full rate on the discounted 1960000 charged amount.
-    const paidTransaction = await transactionRepository.findOneOrFail({
-      where: { id: transactionId },
-    });
-    expect(paidTransaction.affiliateCommission).toBe('160000.00');
-
-    await request(app.getHttpServer())
-      .patch('/api/v1/admin/settings')
-      .set('Authorization', `Bearer ${superadminToken}`)
-      .send({ customer_discount_rate: 0 })
-      .expect(200);
-  });
-
-  it('leaves the customer\'s coin and LinkQu invoice untouched for a referred custom-amount top-up, only cutting the affiliate commission by the transaction\'s own tier bonus (2026-11-05 correction via Ricky, round 2: "motong oleh e fee ne tok" - a referral code changes nothing for the customer, only the affiliate\'s fee absorbs the bonus)', async () => {
+  // Placed last: credits more commission to the shared affiliate profile,
+  // which would throw off every balance assertion earlier in this suite if
+  // run out of order.
+  it('charges the tier bonus of a referred custom-amount top-up to the affiliate commission, with no extra referral bonus or price cut (2026-11-05)', async () => {
     const checkoutResponse = await request(app.getHttpServer())
       .post('/api/v1/topup/checkout-custom')
       .send({
-        amount: 400000,
+        amount: 1000000,
         target_user_id: '13572468',
         affiliate_code: affiliateCode,
       })
       .expect(201);
     const checkoutBody = checkoutResponse.body as {
-      data: { transaction_id: string };
+      data: { transaction_id: string; coin_amount: number };
     };
     const transactionId = checkoutBody.data.transaction_id;
+    // 1.000.000 nominal + 20.000 tier bonus, 0.7% extra off by default.
+    expect(checkoutBody.data.coin_amount).toBe(1020000);
 
-    // Coin delivered (406800 = 400000 + 4000 published bonus tier + 2800
-    // extra-coin) and the LinkQu invoice (400000) are exactly what a
-    // non-referred checkout of the same amount would get.
-    // customerDiscountAmount is set to the 4000 tier bonus purely to cut
-    // the affiliate's commission at payout.
     const pendingTransaction = await transactionRepository.findOneOrFail({
       where: { id: transactionId },
     });
-    expect(pendingTransaction.grossAmount).toBe('400000.00');
-    expect(pendingTransaction.customerDiscountAmount).toBe('4000.00');
-    expect(pendingTransaction.coinAmount).toBe('406800.00');
+    expect(pendingTransaction.grossAmount).toBe('1000000.00');
 
     await request(app.getHttpServer())
       .post('/api/v1/webhooks/linkqu/payment')
       .send({
         partner_reff: transactionId,
-        amount: 400000,
+        amount: 1000000,
         va_number: '7136490000031689',
         username: 'LI307GXIN',
         status: 'SUCCESS',
@@ -643,12 +583,11 @@ describe('Commission crediting and withdrawal (e2e)', () => {
       })
       .expect(200);
 
-    // Full commission would be 400000 * 10% = 40000; the 4000 tier bonus
-    // comes straight out of that, leaving the affiliate 36000.
+    // 1.000.000 * 10% = 100.000, minus the 20.000 bonus = 80.000.
     const paidTransaction = await transactionRepository.findOneOrFail({
       where: { id: transactionId },
     });
-    expect(paidTransaction.affiliateCommission).toBe('36000.00');
+    expect(paidTransaction.affiliateCommission).toBe('80000.00');
   });
 
   it('applies the 1%/5% volume tier once opted in, not retroactive to earlier transactions this month', async () => {

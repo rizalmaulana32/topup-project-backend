@@ -18,6 +18,8 @@ export const MIN_CUSTOM_AMOUNT_RUPIAH = 10000;
  * "koin yang akan dikirim ditambahkan 0.7% dari transaksi"). It compensates
  * the customer for the LinkQu admin fee in coin - the amount charged
  * through LinkQu stays exactly the typed nominal. Floored to a whole coin.
+ * Switched off by default since 2026-11-05 (client via Ricky: "ekstra
+ * disable dulu") - see PlatformSettings.customAmountExtraCoinEnabled.
  */
 export const CUSTOM_AMOUNT_EXTRA_COIN_PER_MILLE = 7; // 0.7%
 
@@ -49,7 +51,7 @@ export interface CustomAmountPricing {
   costBasis: number;
 }
 
-function bonusForAmount(amount: number): number {
+export function bonusForAmount(amount: number): number {
   const tier = BONUS_TIERS.find((t) => amount >= t.threshold);
   return tier?.bonus ?? 0;
 }
@@ -75,13 +77,14 @@ function bonusForAmount(amount: number): number {
 export function calculateCustomAmountPricing(
   amount: number,
   marginRatePercent: number,
+  extraCoinEnabled = true,
 ): CustomAmountPricing {
   const bonusCoin = bonusForAmount(amount);
   // Per mille keeps this integer math - 0.7 as a float makes e.g.
   // 350000 * 0.007 land a hair under 2450 and floor away a coin.
-  const extraCoin = Math.floor(
-    (amount * CUSTOM_AMOUNT_EXTRA_COIN_PER_MILLE) / 1000,
-  );
+  const extraCoin = extraCoinEnabled
+    ? Math.floor((amount * CUSTOM_AMOUNT_EXTRA_COIN_PER_MILLE) / 1000)
+    : 0;
   const fullValueCoin = amount + bonusCoin + extraCoin;
   const coinAmount = Math.floor(fullValueCoin * (1 - marginRatePercent / 100));
   const costBasis = coinAmount;

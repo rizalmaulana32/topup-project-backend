@@ -629,7 +629,8 @@ export class AffiliatesService {
     referralCode: string;
     transactionId: string;
     originalAmount: string;
-    customerDiscountAmount?: string;
+    /** Bonus coin (Rupiah, 1:1) the customer received - charged to this commission. */
+    bonusDeduction?: string;
   }): Promise<string> {
     const queryRunner = this.dataSource.createQueryRunner();
     await queryRunner.connect();
@@ -657,15 +658,13 @@ export class AffiliatesService {
         return '0.00';
       }
 
-      // originalAmount is the caller-supplied pre-discount/pre-bonus
-      // transaction value the commission rate applies to (see TopupService
-      // .handleInvoicePaid's doc comment for how each checkout path derives
-      // it). The same discount Rupiah amount is then subtracted back out of
-      // the commission - i.e. the customer's cut comes directly out of the
-      // affiliate's, not on top of it. This originates at checkout time
-      // rather than being re-derived from the (possibly since-changed) live
-      // settings rate here.
-      const discountAmount = Number(params.customerDiscountAmount ?? 0);
+      // The customer's bonus coin on a referred top-up is charged to the
+      // affiliate (client via Ricky 2026-11-05): e.g. Rp1.000.000 at 5% =
+      // 50.000 commission, minus the 20.000 bonus = 30.000. Floored at 0 -
+      // if the bonus exceeds the commission, the platform absorbs the rest
+      // (confirmed with Ricky 2026-11-05) rather than the balance going
+      // negative.
+      const bonusDeduction = Number(params.bonusDeduction ?? 0);
       const originalAmount = Number(params.originalAmount);
 
       let effectiveRate = Number(profile.commissionRate);
@@ -689,7 +688,7 @@ export class AffiliatesService {
 
       const commissionAmount = Math.max(
         0,
-        (originalAmount * effectiveRate) / 100 - discountAmount,
+        (originalAmount * effectiveRate) / 100 - bonusDeduction,
       );
       const newBalance = Number(profile.commissionBalance) + commissionAmount;
       const newTotalEarned =
@@ -707,7 +706,7 @@ export class AffiliatesService {
         type: CommissionLogType.CREDIT,
         amount: commissionAmount.toFixed(2),
         balanceAfter: newBalance.toFixed(2),
-        description: `Commission for referred transaction ${params.transactionId}`,
+        description: `Commission for referred transaction ${params.transactionId} (${effectiveRate}% of ${originalAmount.toFixed(2)} - bonus ${bonusDeduction.toFixed(2)})`,
       });
       await queryRunner.manager.save(log);
 

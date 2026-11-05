@@ -17,7 +17,10 @@ import { CheckIdDto } from './dto/check-id.dto';
 import { CheckoutDto } from './dto/checkout.dto';
 import { CheckoutCustomAmountDto } from './dto/checkout-custom-amount.dto';
 import { EstimateCustomAmountDto } from './dto/estimate-custom-amount.dto';
-import { calculateCustomAmountPricing } from './custom-amount-pricing.util';
+import {
+  bonusForAmount,
+  calculateCustomAmountPricing,
+} from './custom-amount-pricing.util';
 import { PaymentStatus } from '../transactions/entities/transaction.entity';
 
 @Injectable()
@@ -117,47 +120,20 @@ export class TopupService {
       dto.product_id,
     );
 
-    // A referral code splits part of the affiliate's commission rate back
-    // to the customer as an upfront price cut (client request 2026-10-31:
-    // the affiliate was keeping the full commission with nothing passed
-    // on to the referred customer). Only a code that would actually earn
-    // commission (checkCodeValidity) triggers the discount - same
-    // criteria creditCommissionForTransaction uses, so a fake/inactive
-    // code never discounts the price for nothing.
-    let chargedAmount = product.sellingPrice;
-    let customerDiscountAmount = '0.00';
-    if (dto.affiliate_code) {
-      const codeCheck = await this.affiliatesService.checkCodeValidity(
-        dto.affiliate_code,
-      );
-      if (codeCheck.valid) {
-        const settings = await this.settingsService.get();
-        const minAmount = Number(settings.customerDiscountMinAmount);
-        // Below this, no bonus/discount at all (client request via Ricky
-        // 2026-10-31: "soale 350 munggah onok bonus e" - the bonus only
-        // exists from Rp350.000 up).
-        if (Number(product.sellingPrice) >= minAmount) {
-          const discountRate = Number(settings.customerDiscountRate);
-          const discount =
-            Math.round(Number(product.sellingPrice) * discountRate) / 100;
-          customerDiscountAmount = discount.toFixed(2);
-          chargedAmount = (Number(product.sellingPrice) - discount).toFixed(2);
-        }
-      }
-    }
-
+    // A referral code no longer changes the price or coin (client via Ricky
+    // 2026-11-05): the customer pays full price and gets the product's
+    // normal coin + bonus; the bonus is charged to the affiliate's
+    // commission at payout instead (see handleInvoicePaid).
     const transaction = await this.transactionsService.createPending({
       product,
       targetUserId: dto.target_user_id,
       targetZoneId: dto.target_zone_id,
       referralCode: dto.affiliate_code,
-      grossAmount: chargedAmount,
-      customerDiscountAmount,
     });
 
     const invoice = await this.linkQuService.createInvoice({
       externalId: transaction.id,
-      amount: Number(chargedAmount),
+      amount: Number(product.sellingPrice),
       description: `Top-up ${product.name} for ${dto.target_user_id}`,
     });
 
@@ -192,8 +168,11 @@ export class TopupService {
 
     const amount = (dto.amount ?? dto.coin) as number;
     const settings = await this.settingsService.get();
-    const marginRate = Number(settings.customAmountMarginRate);
-    const pricing = calculateCustomAmountPricing(amount, marginRate);
+    const pricing = calculateCustomAmountPricing(
+      amount,
+      Number(settings.customAmountMarginRate),
+      settings.customAmountExtraCoinEnabled,
+    );
 
     return {
       amount,
@@ -214,6 +193,7 @@ export class TopupService {
       calculateCustomAmountPricing(
         dto.amount,
         Number(settings.customAmountMarginRate),
+        settings.customAmountExtraCoinEnabled,
       );
 
     if (coinAmount <= 0) {
@@ -222,35 +202,9 @@ export class TopupService {
       );
     }
 
-    // Referral-funded (client correction 2026-11-05 via Ricky, second
-    // round: "motong oleh e fee ne tok" - the referral code changes
-    // *nothing* for the customer, neither the LinkQu invoice (full
-    // dto.amount, as already fixed) nor the coin they receive (still just
-    // amount + bonusCoin + extraCoin, same as with no code at all). The
-    // only effect is that when a valid code is used, the transaction's own
-    // published tier bonus (bonusCoin) is paid for out of the affiliate's
-    // commission instead of the platform's margin - see his worked example:
-    // "referal e 50.000 dan transaksi ne oleh bonus 20.000, afiliator e
-    // cuman dapat 30.000". extraCoin (the 0.7% LinkQu-fee compensation) is
-    // never part of this deduction - it isn't "the bonus" he means, it's a
-    // fee makeup that applies regardless of referral. Replaces the
-    // settings.customerDiscountRate/MinAmount mechanism entirely for this
-    // checkout path (still used, unchanged, by the fixed-catalog
-    // checkout()).
-    let customerDiscountAmount = '0.00';
-    if (dto.affiliate_code) {
-      const codeCheck = await this.affiliatesService.checkCodeValidity(
-        dto.affiliate_code,
-      );
-      if (codeCheck.valid) {
-        customerDiscountAmount = bonusCoin.toFixed(2);
-      }
-    }
-
     const transaction =
       await this.transactionsService.createPendingCustomAmount({
         grossAmount: dto.amount.toFixed(2),
-        customerDiscountAmount,
         coinAmount: String(coinAmount),
         costBasis: String(costBasis),
         targetUserId: dto.target_user_id,
@@ -304,16 +258,21 @@ export class TopupService {
     }
 
     let coin: number;
+    // The bonus coin the customer gets on top of the nominal - charged to
+    // the referring affiliate's commission (client via Ricky 2026-11-05).
+    let bonusCoin: number;
     let costBasis: string;
     let providerProductCode: string;
     if (transaction.product) {
       coin =
         Number(transaction.product.coinAmount) +
         Number(transaction.product.bonusCoin);
+      bonusCoin = Number(transaction.product.bonusCoin);
       costBasis = transaction.product.basePrice;
       providerProductCode = transaction.product.providerCode;
     } else if (transaction.coinAmount && transaction.costBasis) {
       coin = Number(transaction.coinAmount);
+      bonusCoin = bonusForAmount(Number(transaction.grossAmount));
       costBasis = transaction.costBasis;
       providerProductCode = 'custom-amount';
     } else {
@@ -335,24 +294,12 @@ export class TopupService {
     });
 
     if (injectResult.success) {
-      // originalAmount is the pre-discount/pre-bonus value the commission
-      // rate applies to. The fixed-catalog checkout() invoices a
-      // discounted grossAmount, so the original price is recovered by
-      // adding the discount back; the custom-amount checkoutCustomAmount()
-      // invoices the full typed amount already (2026-11-05 correction -
-      // see its doc comment), so grossAmount already IS the original and
-      // needs no reconstruction.
       const commissionPaid = transaction.referralCode
         ? await this.affiliatesService.creditCommissionForTransaction({
             referralCode: transaction.referralCode,
             transactionId: transaction.id,
-            originalAmount: transaction.product
-              ? (
-                  Number(transaction.grossAmount) +
-                  Number(transaction.customerDiscountAmount ?? 0)
-                ).toFixed(2)
-              : transaction.grossAmount,
-            customerDiscountAmount: transaction.customerDiscountAmount,
+            originalAmount: transaction.grossAmount,
+            bonusDeduction: bonusCoin.toFixed(2),
           })
         : '0.00';
 

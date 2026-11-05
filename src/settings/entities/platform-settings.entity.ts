@@ -47,6 +47,23 @@ export class PlatformSettings {
   customAmountMarginRate: string;
 
   /**
+   * Whether custom-amount top-ups add the 0.7% extra coin
+   * (CUSTOM_AMOUNT_EXTRA_COIN_PER_MILLE). Off by default (client via Ricky
+   * 2026-11-05: "ekstra disable dulu"); flip back on without a redeploy.
+   */
+  @Column({
+    name: 'custom_amount_extra_coin_enabled',
+    type: 'boolean',
+    default: false,
+  })
+  customAmountExtraCoinEnabled: boolean;
+
+  /**
+   * UNUSED since 2026-11-05 - the referral discount/bonus was dropped; a
+   * referred purchase now charges the user's tier bonus to the affiliate's
+   * commission instead (see AffiliatesService.creditCommissionForTransaction).
+   * Kept only so existing admin clients sending it don't break.
+   *
    * Percentage of a referred order's original price passed back to the
    * CUSTOMER as an upfront checkout discount, funded by reducing the
    * affiliate's commission by the same amount (client request 2026-10-31:

@@ -297,8 +297,8 @@ describe('Topup (e2e)', () => {
       body.data;
     expect(transaction_id).toMatch(/^TRX-\d{8}-\d{4}$/);
     // amount=25000 is below the lowest bonus tier (350000) -> no tier
-    // bonus, just the 0.7% extra-coin compensation: floor(25000*0.007)=175.
-    expect(coin_amount).toBe(25175);
+    // bonus, and the 0.7% extra is off by default -> exactly 1:1.
+    expect(coin_amount).toBe(25000);
     expect(linkqu_reference).toBe(`fake-reference-${transaction_id}`);
     expect(invoice_url).toContain(transaction_id);
 
@@ -320,7 +320,7 @@ describe('Topup (e2e)', () => {
     });
     expect(paidTransaction?.paymentStatus).toBe(PaymentStatus.PAID);
     expect(paidTransaction?.providerStatus).toBe(ProviderStatus.SUCCESS);
-    expect(paidTransaction?.coinAmount).toBe('25175.00');
+    expect(paidTransaction?.coinAmount).toBe('25000.00');
 
     const statusResponse = await request(app.getHttpServer())
       .get(`/api/v1/topup/transactions/${transaction_id}`)
@@ -352,9 +352,9 @@ describe('Topup (e2e)', () => {
       success: true,
       data: {
         amount: 500000,
-        coin_amount: 508500,
+        coin_amount: 505000,
         bonus_coin: 5000,
-        extra_coin: 3500,
+        extra_coin: 0,
       },
     });
   });
@@ -369,9 +369,9 @@ describe('Topup (e2e)', () => {
       success: true,
       data: {
         amount: 370000,
-        coin_amount: 376090,
+        coin_amount: 373500,
         bonus_coin: 3500,
-        extra_coin: 2590,
+        extra_coin: 0,
       },
     });
   });

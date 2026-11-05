@@ -1,4 +1,5 @@
 import {
+  IsBoolean,
   IsNotEmpty,
   IsNumber,
   IsOptional,
@@ -21,6 +22,10 @@ export class UpdateSettingsDto {
   @IsNumber()
   @Min(0)
   custom_amount_margin_rate?: number;
+
+  @IsOptional()
+  @IsBoolean()
+  custom_amount_extra_coin_enabled?: boolean;
 
   @IsOptional()
   @IsNumber()
