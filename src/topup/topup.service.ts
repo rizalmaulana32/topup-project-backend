@@ -20,6 +20,8 @@ import { EstimateCustomAmountDto } from './dto/estimate-custom-amount.dto';
 import {
   bonusForAmount,
   calculateCustomAmountPricing,
+  CUSTOM_AMOUNT_EXTRA_COIN_PER_MILLE,
+  MIN_CUSTOM_AMOUNT_RUPIAH,
 } from './custom-amount-pricing.util';
 import { PaymentStatus } from '../transactions/entities/transaction.entity';
 
@@ -146,6 +148,15 @@ export class TopupService {
       transaction_id: transaction.id,
       linkqu_reference: invoice.invoiceId,
       invoice_url: invoice.invoiceUrl,
+    };
+  }
+
+  async getPublicConfig() {
+    const settings = await this.settingsService.get();
+    return {
+      extra_coin_enabled: settings.customAmountExtraCoinEnabled,
+      extra_coin_percent: CUSTOM_AMOUNT_EXTRA_COIN_PER_MILLE / 10,
+      min_custom_amount: MIN_CUSTOM_AMOUNT_RUPIAH,
     };
   }
 

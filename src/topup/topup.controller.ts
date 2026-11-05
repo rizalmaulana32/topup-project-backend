@@ -44,6 +44,16 @@ export class TopupController {
     return { success: true, data };
   }
 
+  @Get('config')
+  @ApiOperation({
+    summary:
+      'Public top-up page config (no auth): whether the 0.7% extra coin is currently on, its rate, and the minimum custom amount - for banners/validation before the customer types a nominal. Use /topup/estimate for actual coin numbers.',
+  })
+  async getConfig() {
+    const data = await this.topupService.getPublicConfig();
+    return { success: true, data };
+  }
+
   @Get('estimate')
   @ApiOperation({
     summary:

@@ -286,6 +286,20 @@ describe('TopupService', () => {
     });
   });
 
+  describe('getPublicConfig', () => {
+    it('reports the extra-coin toggle from settings, its rate and the minimum amount', async () => {
+      settingsService.get.mockResolvedValue({
+        customAmountExtraCoinEnabled: true,
+      } as any);
+
+      await expect(service.getPublicConfig()).resolves.toEqual({
+        extra_coin_enabled: true,
+        extra_coin_percent: 0.7,
+        min_custom_amount: 10000,
+      });
+    });
+  });
+
   describe('estimateCustomAmount', () => {
     it('derives coin_amount/bonus_coin from a given amount', async () => {
       const result = await service.estimateCustomAmount({ amount: 500000 });
