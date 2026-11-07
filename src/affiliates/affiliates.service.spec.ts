@@ -663,7 +663,7 @@ describe('AffiliatesService', () => {
       expect(injectCoinMock).not.toHaveBeenCalled();
     });
 
-    it('sends net_amount Momo coins and marks a momo_coin withdrawal paid', async () => {
+    it('moves a pending momo_coin withdrawal to approved without sending coins', async () => {
       row = {
         id: 'WDW-1',
         method: WithdrawalMethod.MOMO_COIN,
@@ -671,32 +671,86 @@ describe('AffiliatesService', () => {
         netAmount: '95000.00',
         status: WithdrawalStatus.PENDING,
       };
-      injectCoinMock.mockResolvedValue({ success: true, response: 'ok' });
 
       const result = await service.approveWithdrawal('WDW-1', 'admin-1');
+
+      expect(result.status).toBe(WithdrawalStatus.APPROVED);
+      expect(result.approvedBy).toBe('admin-1');
+      expect(injectCoinMock).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('markWithdrawalProcessed for momo_coin', () => {
+    let row: Record<string, unknown>;
+    beforeEach(() => {
+      row = {
+        id: 'WDW-1',
+        method: WithdrawalMethod.MOMO_COIN,
+        momoUserId: '7100001',
+        netAmount: '95000.00',
+        status: WithdrawalStatus.APPROVED,
+      };
+      withdrawalFindOneMock.mockImplementation(() =>
+        Promise.resolve({ ...row }),
+      );
+      withdrawalUpdateMock.mockImplementation(
+        (
+          criteria: string | { status?: string },
+          patch: Record<string, unknown>,
+        ) => {
+          if (typeof criteria === 'object' && criteria.status !== row.status) {
+            return Promise.resolve({ affected: 0 });
+          }
+          row = { ...row, ...patch };
+          return Promise.resolve({ affected: 1 });
+        },
+      );
+    });
+
+    it('sends net_amount coins once and marks it paid; a second call sends nothing', async () => {
+      injectCoinMock.mockResolvedValue({ success: true, response: 'ok' });
+
+      const result = await service.markWithdrawalProcessed('WDW-1', 'admin-1');
 
       expect(injectCoinMock).toHaveBeenCalledWith(
         expect.objectContaining({ targetUserId: '7100001', coin: 95000 }),
       );
       expect(result.status).toBe(WithdrawalStatus.PAID);
       expect(result.processedBy).toBe('admin-1');
-    });
-
-    it('puts a momo_coin withdrawal back to pending when the coin send fails', async () => {
-      row = {
-        id: 'WDW-1',
-        method: WithdrawalMethod.MOMO_COIN,
-        momoUserId: '7100001',
-        netAmount: '95000.00',
-        status: WithdrawalStatus.PENDING,
-      };
-      injectCoinMock.mockRejectedValue(new Error('provider down'));
 
       await expect(
-        service.approveWithdrawal('WDW-1', 'admin-1'),
+        service.markWithdrawalProcessed('WDW-1', 'admin-1'),
+      ).rejects.toBeInstanceOf(ConflictException);
+      expect(injectCoinMock).toHaveBeenCalledTimes(1);
+    });
+
+    it('goes back to approved when MomoLive definitely refused', async () => {
+      injectCoinMock.mockResolvedValue({
+        success: false,
+        rejected: true,
+        response: 'insufficient balance',
+      });
+
+      await expect(
+        service.markWithdrawalProcessed('WDW-1', 'admin-1'),
       ).rejects.toBeInstanceOf(BadGatewayException);
-      expect(row.status).toBe(WithdrawalStatus.PENDING);
-      expect(row.approvedBy).toBeNull();
+      expect(row.status).toBe(WithdrawalStatus.APPROVED);
+      expect(row.processedBy).toBeNull();
+    });
+
+    it('stays paid with an UNVERIFIED note when the outcome is unknown, so it cannot be re-sent', async () => {
+      injectCoinMock.mockRejectedValue(new Error('socket hang up'));
+
+      await expect(
+        service.markWithdrawalProcessed('WDW-1', 'admin-1'),
+      ).rejects.toBeInstanceOf(BadGatewayException);
+      expect(row.status).toBe(WithdrawalStatus.PAID);
+      expect(row.adminNotes).toContain('UNVERIFIED');
+
+      await expect(
+        service.markWithdrawalProcessed('WDW-1', 'admin-1'),
+      ).rejects.toBeInstanceOf(ConflictException);
+      expect(injectCoinMock).toHaveBeenCalledTimes(1);
     });
   });
 

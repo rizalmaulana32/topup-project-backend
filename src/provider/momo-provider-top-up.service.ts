@@ -106,6 +106,9 @@ export class MomoProviderTopUpService implements ProviderTopUpPort {
     } catch (error) {
       return {
         success: false,
+        // call() throws BadRequestException only for MomoLive's own code != 0
+        // reply or a bad user ID - both mean nothing was transferred.
+        rejected: error instanceof BadRequestException,
         response:
           error instanceof Error ? error.message : 'Unknown provider error',
       };

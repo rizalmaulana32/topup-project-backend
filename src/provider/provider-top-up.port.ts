@@ -14,6 +14,8 @@ export interface InjectCoinParams {
 
 export interface InjectCoinResult {
   success: boolean;
+  /** true only when the provider definitely refused, i.e. no coins were sent. A failure without it has an unknown outcome. */
+  rejected?: boolean;
   response: string;
 }
 

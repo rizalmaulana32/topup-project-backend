@@ -12,6 +12,7 @@ import {
   Post,
   Query,
   Req,
+  StreamableFile,
   UseGuards,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -21,12 +22,16 @@ import {
   ApiParam,
   ApiTags,
 } from '@nestjs/swagger';
+import { Workbook } from 'exceljs';
 import { Request } from 'express';
 import {
   AffiliatesService,
   toLinkedAdmin,
 } from '../affiliates/affiliates.service';
-import { WithdrawalMethod } from '../affiliates/entities/commission-withdrawal.entity';
+import {
+  CommissionWithdrawal,
+  WithdrawalMethod,
+} from '../affiliates/entities/commission-withdrawal.entity';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { Roles } from '../auth/roles.decorator';
 import { RolesGuard } from '../auth/roles.guard';
@@ -35,7 +40,10 @@ import { ContactService } from '../contact/contact.service';
 import { LinkQuService } from '../linkqu/linkqu.service';
 import { PlatformService } from '../platform/platform.service';
 import { PROVIDER_TOP_UP_PORT } from '../provider/provider-top-up.port';
-import type { ProviderTopUpPort } from '../provider/provider-top-up.port';
+import type {
+  CheckIdResult,
+  ProviderTopUpPort,
+} from '../provider/provider-top-up.port';
 import { ProductsService } from '../products/products.service';
 import { SettingsService } from '../settings/settings.service';
 import { TopupService } from '../topup/topup.service';
@@ -43,6 +51,7 @@ import { TransactionsService } from '../transactions/transactions.service';
 import { UserRole } from '../users/entities/user.entity';
 import { AdjustCommissionBalanceDto } from './dto/adjust-commission-balance.dto';
 import { ApproveAffiliateDto } from './dto/approve-affiliate.dto';
+import { CommissionSummaryDto } from './dto/commission-summary.dto';
 import { CreateProductDto } from './dto/create-product.dto';
 import { ListAffiliatesDto } from './dto/list-affiliates.dto';
 import { ListContactMessagesDto } from './dto/list-contact-messages.dto';
@@ -449,6 +458,67 @@ export class AdminController {
     return { success: true };
   }
 
+  @Get('commission-summary')
+  @ApiOperation({
+    summary:
+      "Commission overview for one affiliate (affiliator_id = affiliate profile ID, required): commission balance, total commission ever earned, the month's periode 1 (1-15) and periode 2 (16-end) for `month` (YYYY-MM, default current), and an optional date_from..date_to range (YYYY-MM-DD, inclusive). Period figures count referral commission credits only.",
+  })
+  async commissionSummary(@Query() query: CommissionSummaryDto) {
+    if (query.date_from && query.date_to && query.date_from > query.date_to) {
+      throw new BadRequestException('date_from must not be after date_to');
+    }
+    const data = await this.affiliatesService.getCommissionSummary(
+      query.affiliator_id,
+      { month: query.month, dateFrom: query.date_from, dateTo: query.date_to },
+    );
+    return { success: true, data };
+  }
+
+  @Get('withdrawals/export')
+  @ApiOperation({
+    summary:
+      'Download the commission withdrawals as an .xlsx file, with the same status/method/search filters as GET /withdrawals (limit/offset ignored, max 10000 rows, newest first). Built in memory per request, nothing is stored on the server.',
+  })
+  async exportWithdrawals(
+    @Query() query: ListWithdrawalsDto,
+  ): Promise<StreamableFile> {
+    const result = await this.affiliatesService.findAllWithdrawals({
+      status: query.status,
+      method: query.method,
+      search: query.search,
+      // ponytail: whole export built in memory; stream rows with exceljs' WorkbookWriter if exports outgrow this.
+      limit: 10000,
+      offset: 0,
+    });
+    const workbook = new Workbook();
+    const sheet = workbook.addWorksheet('Withdrawals');
+    sheet.columns = WITHDRAWAL_EXPORT_COLUMNS.map(([key, header]) => ({
+      key,
+      header,
+      width: 20,
+    }));
+    sheet.getRow(1).font = { bold: true };
+    for (const withdrawal of result.items) {
+      const item = toWithdrawalItem(withdrawal, result.momoUsers);
+      sheet.addRow({
+        ...item,
+        amount: Number(item.amount),
+        admin_fee: Number(item.admin_fee),
+        net_amount: Number(item.net_amount),
+        created_at: toJakartaTime(item.created_at),
+        approved_at: toJakartaTime(item.approved_at),
+        processed_at: toJakartaTime(item.processed_at),
+      });
+    }
+
+    const buffer = await workbook.xlsx.writeBuffer();
+    const today = toJakartaTime(new Date())?.slice(0, 10);
+    return new StreamableFile(Buffer.from(buffer), {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      disposition: `attachment; filename="withdrawals-${today}.xlsx"`,
+    });
+  }
+
   @Get('withdrawals')
   @ApiOperation({ summary: 'List commission withdrawal requests' })
   async listWithdrawals(@Query() query: ListWithdrawalsDto) {
@@ -462,31 +532,9 @@ export class AdminController {
     return {
       success: true,
       data: {
-        items: result.items.map((withdrawal) => ({
-          id: withdrawal.id,
-          affiliator_id: withdrawal.affiliatorId,
-          affiliator_name: withdrawal.affiliator?.user?.name ?? null,
-          affiliator_email: withdrawal.affiliator?.user?.email ?? null,
-          amount: withdrawal.amount,
-          admin_fee: withdrawal.adminFee,
-          net_amount: withdrawal.netAmount,
-          method: withdrawal.method,
-          momo_user_id: withdrawal.momoUserId,
-          coin_amount:
-            withdrawal.method === WithdrawalMethod.MOMO_COIN
-              ? withdrawal.netAmount
-              : null,
-          bank_name: withdrawal.bankName,
-          account_number: withdrawal.accountNumber,
-          account_holder: withdrawal.accountHolder,
-          status: withdrawal.status,
-          admin_notes: withdrawal.adminNotes,
-          approved_by: withdrawal.approvedBy,
-          approved_at: withdrawal.approvedAt,
-          processed_by: withdrawal.processedBy,
-          processed_at: withdrawal.processedAt,
-          created_at: withdrawal.createdAt,
-        })),
+        items: result.items.map((withdrawal) =>
+          toWithdrawalItem(withdrawal, result.momoUsers),
+        ),
         total: result.total,
         limit: query.limit ?? 20,
         offset: query.offset ?? 0,
@@ -497,7 +545,7 @@ export class AdminController {
   @Post('withdrawals/:id/approve')
   @ApiOperation({
     summary:
-      'Approve a withdrawal request. bank: the actual transfer is done manually outside the system; use /process afterward to mark it paid. momo_coin: coins are sent immediately and the withdrawal becomes paid (stays pending if the send fails).',
+      'Approve a withdrawal request (pending -> approved). Nothing is sent here; use /process afterward. bank: transfer manually, then /process marks it paid. momo_coin: /process sends the coins.',
   })
   async approveWithdrawal(
     @Param('id') id: string,
@@ -523,7 +571,7 @@ export class AdminController {
   @Post('withdrawals/:id/process')
   @ApiOperation({
     summary:
-      'Mark an approved withdrawal as paid after the admin has manually transferred the funds',
+      'Mark an approved withdrawal as paid. bank: after the admin has manually transferred the funds. momo_coin: sends the coins now (back to approved if MomoLive refuses; stays paid with an UNVERIFIED note if the outcome is unknown).',
   })
   async processWithdrawal(
     @Param('id') id: string,
@@ -572,7 +620,7 @@ export class AdminController {
   @Get('transactions/totals')
   @ApiOperation({
     summary:
-      'Two customer-paid totals for the superadmin dashboard (sum across all paid transactions) - frontend picks which to display. gross_total is the product/nominal price only; total_with_fee includes LinkQu\'s real admin fee, i.e. what customers actually paid out of pocket.',
+      "Two customer-paid totals for the superadmin dashboard (sum across all paid transactions) - frontend picks which to display. gross_total is the product/nominal price only; total_with_fee includes LinkQu's real admin fee, i.e. what customers actually paid out of pocket.",
   })
   async getTransactionTotals() {
     const data = await this.transactionsService.getPaidTotals();
@@ -615,7 +663,10 @@ export class AdminController {
     summary:
       'Testing-only: mark a pending transaction as paid and run the real coin-injection/commission/revenue pipeline, without a real LinkQu payment. Disabled unless ALLOW_PAYMENT_SIMULATION=true is set on the server.',
   })
-  @ApiParam({ name: 'id', description: 'The transaction ID, e.g. TRX-20261002-6498' })
+  @ApiParam({
+    name: 'id',
+    description: 'The transaction ID, e.g. TRX-20261002-6498',
+  })
   async simulatePaidTransaction(@Param('id') id: string) {
     if (this.configService.get<string>('ALLOW_PAYMENT_SIMULATION') !== 'true') {
       throw new ForbiddenException(
@@ -825,4 +876,69 @@ export class AdminController {
       },
     };
   }
+}
+
+/** One withdrawal as GET /admin/withdrawals returns it (also the export's rows). */
+function toWithdrawalItem(
+  withdrawal: CommissionWithdrawal,
+  momoUsers: Map<string, CheckIdResult | null>,
+) {
+  const momoUser = withdrawal.momoUserId
+    ? momoUsers.get(withdrawal.momoUserId)
+    : null;
+  return {
+    id: withdrawal.id,
+    affiliator_id: withdrawal.affiliatorId,
+    affiliator_name: withdrawal.affiliator?.user?.name ?? null,
+    affiliator_email: withdrawal.affiliator?.user?.email ?? null,
+    amount: withdrawal.amount,
+    admin_fee: withdrawal.adminFee,
+    net_amount: withdrawal.netAmount,
+    method: withdrawal.method,
+    momo_user_id: withdrawal.momoUserId,
+    momo_username: momoUser?.username ?? null,
+    momo_avatar_url: momoUser?.avatarUrl ?? null,
+    coin_amount:
+      withdrawal.method === WithdrawalMethod.MOMO_COIN
+        ? withdrawal.netAmount
+        : null,
+    bank_name: withdrawal.bankName,
+    account_number: withdrawal.accountNumber,
+    account_holder: withdrawal.accountHolder,
+    status: withdrawal.status,
+    admin_notes: withdrawal.adminNotes,
+    approved_by: withdrawal.approvedBy,
+    approved_at: withdrawal.approvedAt,
+    processed_by: withdrawal.processedBy,
+    processed_at: withdrawal.processedAt,
+    created_at: withdrawal.createdAt,
+  };
+}
+
+const WITHDRAWAL_EXPORT_COLUMNS: [string, string][] = [
+  ['id', 'Withdrawal ID'],
+  ['created_at', 'Created At (WIB)'],
+  ['affiliator_id', 'Affiliator ID'],
+  ['affiliator_name', 'Affiliator Name'],
+  ['affiliator_email', 'Affiliator Email'],
+  ['method', 'Method'],
+  ['status', 'Status'],
+  ['amount', 'Amount'],
+  ['admin_fee', 'Admin Fee'],
+  ['net_amount', 'Net Amount'],
+  ['momo_user_id', 'Momo User ID'],
+  ['momo_username', 'Momo Username'],
+  ['bank_name', 'Bank'],
+  ['account_number', 'Account Number'],
+  ['account_holder', 'Account Holder'],
+  ['admin_notes', 'Admin Notes'],
+  ['approved_at', 'Approved At (WIB)'],
+  ['processed_at', 'Processed At (WIB)'],
+];
+
+/** "YYYY-MM-DD HH:mm:ss" in Asia/Jakarta, whatever the server's TZ. */
+function toJakartaTime(date: Date | null): string | null {
+  return date
+    ? date.toLocaleString('sv-SE', { timeZone: 'Asia/Jakarta' })
+    : null;
 }

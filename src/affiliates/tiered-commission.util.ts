@@ -30,3 +30,13 @@ export function currentPeriodKey(now: Date = new Date()): string {
   const month = String(now.getUTCMonth() + 1).padStart(2, '0');
   return `${year}-${month}`;
 }
+
+/** Payout periods of a 'YYYY-MM' month: periode 1 = 1-15, periode 2 = 16-last day (YYYY-MM-DD, inclusive). */
+export function monthPayoutPeriods(month: string) {
+  const [year, monthNumber] = month.split('-').map(Number);
+  const lastDay = new Date(Date.UTC(year, monthNumber, 0)).getUTCDate();
+  return {
+    period_1: { date_from: `${month}-01`, date_to: `${month}-15` },
+    period_2: { date_from: `${month}-16`, date_to: `${month}-${lastDay}` },
+  };
+}

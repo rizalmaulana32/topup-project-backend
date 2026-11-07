@@ -27,6 +27,7 @@ import { RegisterAffiliateDto } from './dto/register-affiliate.dto';
 import {
   calculateTieredCommissionRate,
   currentPeriodKey,
+  monthPayoutPeriods,
 } from './tiered-commission.util';
 import { AffiliatorProfile } from './entities/affiliator-profile.entity';
 import {
@@ -236,6 +237,21 @@ export class AffiliatesService {
    *   commission credits and a `withdrawal` object (bank or Momo coin payout)
    *   for withdrawal debits/refunds.
    */
+  /** POST /topup/check-id per distinct Momo ID; a failed lookup maps to null. */
+  private async lookupMomoUsers(ids: Iterable<string>) {
+    return new Map(
+      await Promise.all(
+        [...new Set(ids)].map(async (id) => {
+          try {
+            return [id, await this.provider.checkId('', id)] as const;
+          } catch {
+            return [id, null] as const;
+          }
+        }),
+      ),
+    );
+  }
+
   private async buildHistoryInfo(
     referredTransactions: Transaction[],
     commissionHistory: CommissionLog[],
@@ -273,17 +289,7 @@ export class AffiliatesService {
         .map((w) => w.momoUserId)
         .filter((id): id is string => id !== null),
     ]);
-    const momoUsers = new Map(
-      await Promise.all(
-        [...momoIds].map(async (id) => {
-          try {
-            return [id, await this.provider.checkId('', id)] as const;
-          } catch {
-            return [id, null] as const;
-          }
-        }),
-      ),
-    );
+    const momoUsers = await this.lookupMomoUsers(momoIds);
 
     const momoInfo = (transactionId: string | null) => {
       const targetUserId = transactionId
@@ -865,9 +871,8 @@ export class AffiliatesService {
    * an admin has signed off; see markWithdrawalProcessed for the second
    * step once the manual transfer is actually done.
    *
-   * A momo_coin withdrawal is different: approval sends net_amount coins to
-   * the Momo ID right away and lands on PAID. If the send fails it goes back
-   * to PENDING so the admin can retry or reject (which refunds).
+   * momo_coin works the same way (per Ricky, 2026-11-07): approval only lands
+   * on APPROVED; the coins are sent by markWithdrawalProcessed.
    */
   async approveWithdrawal(
     withdrawalId: string,
@@ -875,8 +880,7 @@ export class AffiliatesService {
   ): Promise<CommissionWithdrawal> {
     const withdrawal = await this.findWithdrawalByIdOrFail(withdrawalId);
 
-    // Conditional update so two concurrent approvals can't both pass the
-    // status check - matters for momo_coin, where approval sends coins.
+    // Conditional update so two concurrent approvals can't both pass the status check.
     const claimed = await this.withdrawalRepository.update(
       { id: withdrawalId, status: WithdrawalStatus.PENDING },
       {
@@ -891,45 +895,22 @@ export class AffiliatesService {
       );
     }
 
-    if (withdrawal.method === WithdrawalMethod.MOMO_COIN) {
-      const result = await this.provider
-        .injectCoin({
-          productProviderCode: 'AFFILIATE_WITHDRAWAL',
-          targetUserId: withdrawal.momoUserId ?? '',
-          coin: Number(withdrawal.netAmount),
-        })
-        .catch((error: unknown) => ({
-          success: false,
-          response: error instanceof Error ? error.message : String(error),
-        }));
-
-      if (!result.success) {
-        await this.withdrawalRepository.update(withdrawalId, {
-          status: WithdrawalStatus.PENDING,
-          approvedBy: null,
-          approvedAt: null,
-        });
-        throw new BadGatewayException(
-          `Sending Momo coins for withdrawal ${withdrawalId} failed: ${result.response}`,
-        );
-      }
-
-      await this.withdrawalRepository.update(withdrawalId, {
-        status: WithdrawalStatus.PAID,
-        processedBy: adminUserId,
-        processedAt: new Date(),
-        adminNotes: `Momo coin send: ${result.response}`,
-      });
-    }
-
     return this.findWithdrawalByIdOrFail(withdrawalId);
   }
 
   /**
-   * Marks a withdrawal as paid after an admin has manually transferred the
-   * funds (outside the system - see approveWithdrawal's doc comment for
-   * why). `notes` is meant for a transfer reference/proof so the paid
-   * record isn't just a bare timestamp.
+   * Marks an approved withdrawal as paid. `notes` is meant for a transfer
+   * reference/proof so the paid record isn't just a bare timestamp.
+   *
+   * bank: the admin has already transferred the funds manually (see
+   * approveWithdrawal's doc comment for why).
+   *
+   * momo_coin: this is where net_amount coins are sent. The row is claimed
+   * APPROVED -> PAID before sending, so a double click or retry can never
+   * send twice. If MomoLive definitely refused (nothing sent) it goes back to
+   * APPROVED for a retry. If the outcome is unknown (network error, timeout,
+   * non-JSON reply) it stays PAID with a note: the coins may have arrived,
+   * and re-sending is how WDW duplicates happened before (2026-11-07).
    */
   async markWithdrawalProcessed(
     withdrawalId: string,
@@ -937,6 +918,10 @@ export class AffiliatesService {
     notes?: string,
   ): Promise<CommissionWithdrawal> {
     const withdrawal = await this.findWithdrawalByIdOrFail(withdrawalId);
+
+    if (withdrawal.method === WithdrawalMethod.MOMO_COIN) {
+      return this.sendMomoCoinWithdrawal(withdrawal, adminUserId, notes);
+    }
 
     if (withdrawal.status !== WithdrawalStatus.APPROVED) {
       throw new ConflictException(
@@ -951,6 +936,67 @@ export class AffiliatesService {
       withdrawal.adminNotes = notes;
     }
     return this.withdrawalRepository.save(withdrawal);
+  }
+
+  private async sendMomoCoinWithdrawal(
+    withdrawal: CommissionWithdrawal,
+    adminUserId: string,
+    notes?: string,
+  ): Promise<CommissionWithdrawal> {
+    const claimed = await this.withdrawalRepository.update(
+      { id: withdrawal.id, status: WithdrawalStatus.APPROVED },
+      {
+        status: WithdrawalStatus.PAID,
+        processedBy: adminUserId,
+        processedAt: new Date(),
+      },
+    );
+    if (!claimed.affected) {
+      throw new ConflictException(
+        `Withdrawal ${withdrawal.id} is not approved (current status: ${withdrawal.status})`,
+      );
+    }
+
+    const result = await this.provider
+      .injectCoin({
+        productProviderCode: 'AFFILIATE_WITHDRAWAL',
+        targetUserId: withdrawal.momoUserId ?? '',
+        coin: Number(withdrawal.netAmount),
+      })
+      .catch((error: unknown) => ({
+        success: false,
+        rejected: false,
+        response: error instanceof Error ? error.message : String(error),
+      }));
+    const prefix = notes ? `${notes} | ` : '';
+
+    if (result.success) {
+      await this.withdrawalRepository.update(withdrawal.id, {
+        adminNotes: `${prefix}Momo coin send: ${result.response}`,
+      });
+      return this.findWithdrawalByIdOrFail(withdrawal.id);
+    }
+
+    if (result.rejected) {
+      await this.withdrawalRepository.update(withdrawal.id, {
+        status: WithdrawalStatus.APPROVED,
+        processedBy: null,
+        processedAt: null,
+      });
+      throw new BadGatewayException(
+        `MomoLive refused the coin send for withdrawal ${withdrawal.id} (nothing sent, still approved - retry): ${result.response}`,
+      );
+    }
+
+    await this.withdrawalRepository.update(withdrawal.id, {
+      adminNotes: `${prefix}UNVERIFIED Momo coin send - check MomoLive before sending again: ${result.response}`,
+    });
+    this.logger.error(
+      `Momo coin send for withdrawal ${withdrawal.id} has an unknown outcome: ${result.response}`,
+    );
+    throw new BadGatewayException(
+      `Momo coin send for withdrawal ${withdrawal.id} has an unknown outcome: ${result.response}. Marked paid to prevent a duplicate send - check in MomoLive whether the coins arrived.`,
+    );
   }
 
   /**
@@ -1175,6 +1221,58 @@ export class AffiliatesService {
   }
 
   /**
+   * Superadmin commission overview for one affiliate (affiliatorId = profile
+   * id): current balance, all-time earned, the month's two payout periods
+   * (1-15, 16-end) and an optional custom range. Period figures come from
+   * getPeriodStats, i.e. referral commission credits only - manual
+   * adjustments and withdrawal refunds don't count as earned in the period.
+   */
+  async getCommissionSummary(
+    affiliatorId: string,
+    query: { month?: string; dateFrom?: string; dateTo?: string },
+  ) {
+    const profile = await this.findProfileByIdOrFail(affiliatorId);
+    const month = query.month ?? currentPeriodKey();
+    const { period_1, period_2 } = monthPayoutPeriods(month);
+
+    const statsFor = async (dateFrom?: string, dateTo?: string) => {
+      const stats = (
+        await this.getPeriodStats([profile.id], { dateFrom, dateTo })
+      ).get(String(profile.id));
+      return {
+        date_from: dateFrom ?? null,
+        date_to: dateTo ?? null,
+        transaction_count: stats?.transactionCount ?? 0,
+        gross_amount: stats?.grossAmount ?? '0.00',
+        commission: stats?.commission ?? '0.00',
+      };
+    };
+
+    const [first, second, range] = await Promise.all([
+      statsFor(period_1.date_from, period_1.date_to),
+      statsFor(period_2.date_from, period_2.date_to),
+      query.dateFrom || query.dateTo
+        ? statsFor(query.dateFrom, query.dateTo)
+        : null,
+    ]);
+
+    return {
+      affiliator: {
+        affiliator_id: profile.id,
+        name: profile.user?.name ?? null,
+        email: profile.user?.email ?? null,
+        affiliate_code: profile.affiliateCode,
+      },
+      commission_balance: profile.commissionBalance,
+      total_commission_earned: profile.totalCommissionEarned,
+      month,
+      period_1: first,
+      period_2: second,
+      range,
+    };
+  }
+
+  /**
    * Per-affiliate referral sales in a date range (both ends inclusive,
    * YYYY-MM-DD, either optional): paid referred transactions, their gross
    * amount and the commission credited. Read from commission credit logs
@@ -1236,7 +1334,7 @@ export class AffiliatesService {
     search?: string;
     limit: number;
     offset: number;
-  }): Promise<{ items: CommissionWithdrawal[]; total: number }> {
+  }) {
     const qb = this.withdrawalRepository
       .createQueryBuilder('withdrawal')
       .leftJoinAndSelect('withdrawal.affiliator', 'affiliator')
@@ -1260,7 +1358,10 @@ export class AffiliatesService {
     }
 
     const [items, total] = await qb.getManyAndCount();
-    return { items, total };
+    const momoUsers = await this.lookupMomoUsers(
+      items.map((w) => w.momoUserId).filter((id): id is string => id !== null),
+    );
+    return { items, total, momoUsers };
   }
 }
 

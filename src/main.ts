@@ -5,7 +5,8 @@ import { AppModule } from './app.module';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
-  app.enableCors();
+  // Exposed so the frontend can read the export's filename.
+  app.enableCors({ exposedHeaders: ['Content-Disposition'] });
   app.setGlobalPrefix('api/v1');
   app.useGlobalPipes(
     new ValidationPipe({
