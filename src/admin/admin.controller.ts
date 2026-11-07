@@ -22,8 +22,8 @@ import {
   ApiParam,
   ApiTags,
 } from '@nestjs/swagger';
-import { Workbook } from 'exceljs';
 import { Request } from 'express';
+import { toJakartaTime, toXlsxFile } from '../common/utils/xlsx.util';
 import {
   AffiliatesService,
   toLinkedAdmin,
@@ -31,6 +31,7 @@ import {
 import {
   CommissionWithdrawal,
   WithdrawalMethod,
+  WithdrawalStatus,
 } from '../affiliates/entities/commission-withdrawal.entity';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { Roles } from '../auth/roles.decorator';
@@ -47,6 +48,7 @@ import type {
 import { ProductsService } from '../products/products.service';
 import { SettingsService } from '../settings/settings.service';
 import { TopupService } from '../topup/topup.service';
+import { PaymentStatus } from '../transactions/entities/transaction.entity';
 import { TransactionsService } from '../transactions/transactions.service';
 import { UserRole } from '../users/entities/user.entity';
 import { AdjustCommissionBalanceDto } from './dto/adjust-commission-balance.dto';
@@ -477,46 +479,35 @@ export class AdminController {
   @Get('withdrawals/export')
   @ApiOperation({
     summary:
-      'Download the commission withdrawals as an .xlsx file, with the same status/method/search filters as GET /withdrawals (limit/offset ignored, max 10000 rows, newest first). Built in memory per request, nothing is stored on the server.',
+      'Download the successful (paid) commission withdrawals as an .xlsx file. Filters: method and search, as in GET /withdrawals; status is always paid, and limit/offset are ignored (max 10000 rows, newest first). Built in memory per request, nothing is stored on the server.',
   })
   async exportWithdrawals(
     @Query() query: ListWithdrawalsDto,
   ): Promise<StreamableFile> {
     const result = await this.affiliatesService.findAllWithdrawals({
-      status: query.status,
+      // Only successful withdrawals are exported (client request, 2026-11-07).
+      status: WithdrawalStatus.PAID,
       method: query.method,
       search: query.search,
-      // ponytail: whole export built in memory; stream rows with exceljs' WorkbookWriter if exports outgrow this.
       limit: 10000,
       offset: 0,
     });
-    const workbook = new Workbook();
-    const sheet = workbook.addWorksheet('Withdrawals');
-    sheet.columns = WITHDRAWAL_EXPORT_COLUMNS.map(([key, header]) => ({
-      key,
-      header,
-      width: 20,
-    }));
-    sheet.getRow(1).font = { bold: true };
-    for (const withdrawal of result.items) {
-      const item = toWithdrawalItem(withdrawal, result.momoUsers);
-      sheet.addRow({
-        ...item,
-        amount: Number(item.amount),
-        admin_fee: Number(item.admin_fee),
-        net_amount: Number(item.net_amount),
-        created_at: toJakartaTime(item.created_at),
-        approved_at: toJakartaTime(item.approved_at),
-        processed_at: toJakartaTime(item.processed_at),
-      });
-    }
-
-    const buffer = await workbook.xlsx.writeBuffer();
-    const today = toJakartaTime(new Date())?.slice(0, 10);
-    return new StreamableFile(Buffer.from(buffer), {
-      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-      disposition: `attachment; filename="withdrawals-${today}.xlsx"`,
-    });
+    return toXlsxFile(
+      'withdrawals',
+      WITHDRAWAL_EXPORT_COLUMNS,
+      result.items.map((withdrawal) => {
+        const item = toWithdrawalItem(withdrawal, result.momoUsers);
+        return {
+          ...item,
+          amount: Number(item.amount),
+          admin_fee: Number(item.admin_fee),
+          net_amount: Number(item.net_amount),
+          created_at: toJakartaTime(item.created_at),
+          approved_at: toJakartaTime(item.approved_at),
+          processed_at: toJakartaTime(item.processed_at),
+        };
+      }),
+    );
   }
 
   @Get('withdrawals')
@@ -631,6 +622,52 @@ export class AdminController {
         total_with_fee: data.totalWithFee,
       },
     };
+  }
+
+  @Get('transactions/export')
+  @ApiOperation({
+    summary:
+      'Download the successful (paid) transactions as an .xlsx file. Filters: date_from/date_to, product_id, referral_code, amount_min/amount_max, as in GET /transactions; status is always paid, and limit/offset are ignored (max 10000 rows, newest first). Built in memory per request, nothing is stored on the server.',
+  })
+  async exportTransactions(
+    @Query() query: ListTransactionsDto,
+  ): Promise<StreamableFile> {
+    const result = await this.transactionsService.findAll({
+      // Only successful transactions are exported (client request, 2026-11-07).
+      status: PaymentStatus.PAID,
+      dateFrom: query.date_from,
+      dateTo: query.date_to,
+      productId: query.product_id,
+      referralCode: query.referral_code,
+      amountMin: query.amount_min,
+      amountMax: query.amount_max,
+      limit: 10000,
+      offset: 0,
+    });
+    const toNumber = (value: string | null) =>
+      value === null ? null : Number(value);
+    return toXlsxFile(
+      'transactions',
+      TRANSACTION_EXPORT_COLUMNS,
+      result.items.map((t) => ({
+        id: t.id,
+        created_at: toJakartaTime(t.createdAt),
+        paid_at: toJakartaTime(t.paidAt),
+        completed_at: toJakartaTime(t.completedAt),
+        product: t.product?.name ?? null,
+        coin_amount: toNumber(t.coinAmount),
+        target_user_id: t.targetUserId,
+        referral_code: t.referralCode,
+        gross_amount: toNumber(t.grossAmount),
+        customer_discount_amount: toNumber(t.customerDiscountAmount),
+        affiliate_commission: toNumber(t.affiliateCommission),
+        provider_fee: toNumber(t.providerFee),
+        cost_basis: toNumber(t.costBasis),
+        payment_status: t.paymentStatus,
+        provider_status: t.providerStatus,
+        linkqu_reference: t.linkQuReference,
+      })),
+    );
   }
 
   @Get('transactions')
@@ -936,9 +973,21 @@ const WITHDRAWAL_EXPORT_COLUMNS: [string, string][] = [
   ['processed_at', 'Processed At (WIB)'],
 ];
 
-/** "YYYY-MM-DD HH:mm:ss" in Asia/Jakarta, whatever the server's TZ. */
-function toJakartaTime(date: Date | null): string | null {
-  return date
-    ? date.toLocaleString('sv-SE', { timeZone: 'Asia/Jakarta' })
-    : null;
-}
+const TRANSACTION_EXPORT_COLUMNS: [string, string][] = [
+  ['id', 'Transaction ID'],
+  ['created_at', 'Created At (WIB)'],
+  ['paid_at', 'Paid At (WIB)'],
+  ['completed_at', 'Completed At (WIB)'],
+  ['product', 'Product'],
+  ['coin_amount', 'Coin Amount'],
+  ['target_user_id', 'Target User ID'],
+  ['referral_code', 'Referral Code'],
+  ['gross_amount', 'Gross Amount'],
+  ['customer_discount_amount', 'Customer Discount'],
+  ['affiliate_commission', 'Affiliate Commission'],
+  ['provider_fee', 'Provider Fee'],
+  ['cost_basis', 'Cost Basis'],
+  ['payment_status', 'Payment Status'],
+  ['provider_status', 'Provider Status'],
+  ['linkqu_reference', 'LinkQu Reference'],
+];

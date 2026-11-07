@@ -8,6 +8,7 @@ import {
   Post,
   Query,
   Req,
+  StreamableFile,
   UseGuards,
 } from '@nestjs/common';
 import {
@@ -17,6 +18,7 @@ import {
   ApiTags,
 } from '@nestjs/swagger';
 import { Request } from 'express';
+import { toJakartaTime, toXlsxFile } from '../common/utils/xlsx.util';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { Roles } from '../auth/roles.decorator';
 import { RolesGuard } from '../auth/roles.guard';
@@ -28,6 +30,7 @@ import { CreateManualTopupDto } from './dto/create-manual-topup.dto';
 import { ListManualTopupsDto } from './dto/list-manual-topups.dto';
 import { UpdateAdminDto } from './dto/update-admin.dto';
 import { AdminProfile } from './entities/admin-profile.entity';
+import { ManualTopupStatus } from './entities/manual-topup.entity';
 import {
   ManualTopupSend,
   ManualTopupSendStatus,
@@ -97,6 +100,42 @@ export class ManualTopupController {
   async getAdmin(@Param('id') id: string) {
     const detail = await this.manualTopupService.getAdminDetail(id);
     return { success: true, data: toAdminDetailResponse(detail) };
+  }
+
+  @Get('manual-admins/:id/export')
+  @ApiOperation({
+    summary:
+      "Download one admin's successful coin sends (manual transfer history, one row per send, newest first) as an .xlsx file. Failed sends are left out. Built in memory per request, nothing is stored on the server. Works for deleted admins too.",
+  })
+  @ApiParam({
+    name: 'id',
+    description: 'The admin PROFILE ID from GET /admin/manual-admins',
+  })
+  async exportAdminTransfers(@Param('id') id: string): Promise<StreamableFile> {
+    const detail = await this.manualTopupService.getAdminDetail(id);
+    const topupById = new Map(detail.manualTopups.map((m) => [m.id, m]));
+    return toXlsxFile(
+      `admin-${detail.profile.id}-transfers`,
+      ADMIN_TRANSFER_EXPORT_COLUMNS,
+      detail.sends
+        // Only successful sends are exported (client request, 2026-11-07).
+        .filter((send) => send.status === ManualTopupSendStatus.SUCCESS)
+        .reverse()
+        .map((send) => {
+          const manualTopup = topupById.get(send.manualTopupId);
+          return {
+            id: send.id,
+            sent_at: toJakartaTime(send.sentAt),
+            manual_topup_id: send.manualTopupId,
+            momo_user_id: manualTopup?.momoUserId ?? null,
+            customer_name: manualTopup?.customerName ?? null,
+            amount: Number(send.amount),
+            status: send.status,
+            admin_name: detail.profile.user.name,
+            admin_email: detail.profile.user.email,
+          };
+        }),
+    );
   }
 
   @Patch('manual-admins/:id')
@@ -174,6 +213,41 @@ export class ManualTopupController {
       createdBy: request.user.id,
     });
     return { success: true, data: toManualTopupResponse(manualTopup) };
+  }
+
+  @Get('manual-topups/export')
+  @Roles(UserRole.SUPERADMIN, UserRole.ADMIN)
+  @ApiOperation({
+    summary:
+      "Download the completed manual top-ups as an .xlsx file (an admin-role caller only gets their own, a superadmin gets everyone's). status is always completed; limit/offset are ignored (max 10000 rows, newest first). Built in memory per request, nothing is stored on the server.",
+  })
+  async exportManualTopups(
+    @Req() request: Request & { user: AuthenticatedUser },
+  ): Promise<StreamableFile> {
+    const isAdminRole = request.user.role === UserRole.ADMIN;
+    const result = await this.manualTopupService.findAll({
+      // Only successful (completed) top-ups are exported (client request, 2026-11-07).
+      status: ManualTopupStatus.COMPLETED,
+      createdBy: isAdminRole ? request.user.id : undefined,
+      limit: 10000,
+      offset: 0,
+    });
+    return toXlsxFile(
+      'manual-topups',
+      MANUAL_TOPUP_EXPORT_COLUMNS,
+      result.items.map((manualTopup) => ({
+        id: manualTopup.id,
+        created_at: toJakartaTime(manualTopup.createdAt),
+        momo_user_id: manualTopup.momoUserId,
+        customer_name: manualTopup.customerName,
+        total_amount: Number(manualTopup.totalAmount),
+        amount_per_send: Number(manualTopup.amountPerSend),
+        amount_sent: Number(manualTopup.amountSent),
+        interval_minutes: manualTopup.intervalMinutes,
+        status: manualTopup.status,
+        created_by: manualTopup.createdBy,
+      })),
+    );
   }
 
   @Get('manual-topups')
@@ -382,3 +456,28 @@ export function toAdminDetailResponse(detail: AdminDetail) {
     })),
   };
 }
+
+const MANUAL_TOPUP_EXPORT_COLUMNS: [string, string][] = [
+  ['id', 'Manual Top-up ID'],
+  ['created_at', 'Created At (WIB)'],
+  ['momo_user_id', 'Momo User ID'],
+  ['customer_name', 'Customer Name'],
+  ['total_amount', 'Total Amount'],
+  ['amount_per_send', 'Amount per Send'],
+  ['amount_sent', 'Amount Sent'],
+  ['interval_minutes', 'Interval (minutes)'],
+  ['status', 'Status'],
+  ['created_by', 'Created By (user ID)'],
+];
+
+const ADMIN_TRANSFER_EXPORT_COLUMNS: [string, string][] = [
+  ['id', 'Send ID'],
+  ['sent_at', 'Sent At (WIB)'],
+  ['manual_topup_id', 'Manual Top-up ID'],
+  ['momo_user_id', 'Momo User ID'],
+  ['customer_name', 'Customer Name'],
+  ['amount', 'Amount'],
+  ['status', 'Status'],
+  ['admin_name', 'Admin Name'],
+  ['admin_email', 'Admin Email'],
+];
