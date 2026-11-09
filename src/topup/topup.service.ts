@@ -8,17 +8,16 @@ import {
 import { PROVIDER_TOP_UP_PORT } from '../provider/provider-top-up.port';
 import type { ProviderTopUpPort } from '../provider/provider-top-up.port';
 import { AffiliatesService } from '../affiliates/affiliates.service';
+import { BonusTiersService } from '../bonus-tiers/bonus-tiers.service';
 import { PlatformService } from '../platform/platform.service';
-import { ProductsService } from '../products/products.service';
 import { SettingsService } from '../settings/settings.service';
+import { SuperAffiliatesService } from '../super-affiliates/super-affiliates.service';
 import { TransactionsService } from '../transactions/transactions.service';
 import { LinkQuService } from '../linkqu/linkqu.service';
 import { CheckIdDto } from './dto/check-id.dto';
-import { CheckoutDto } from './dto/checkout.dto';
 import { CheckoutCustomAmountDto } from './dto/checkout-custom-amount.dto';
 import { EstimateCustomAmountDto } from './dto/estimate-custom-amount.dto';
 import {
-  bonusForAmount,
   calculateCustomAmountPricing,
   CUSTOM_AMOUNT_EXTRA_COIN_PER_MILLE,
   MIN_CUSTOM_AMOUNT_RUPIAH,
@@ -32,12 +31,13 @@ export class TopupService {
   constructor(
     @Inject(PROVIDER_TOP_UP_PORT)
     private readonly provider: ProviderTopUpPort,
-    private readonly productsService: ProductsService,
     private readonly transactionsService: TransactionsService,
     private readonly linkQuService: LinkQuService,
     private readonly affiliatesService: AffiliatesService,
     private readonly platformService: PlatformService,
     private readonly settingsService: SettingsService,
+    private readonly bonusTiersService: BonusTiersService,
+    private readonly superAffiliatesService: SuperAffiliatesService,
   ) {}
 
   /**
@@ -50,18 +50,6 @@ export class TopupService {
   async validateAffiliateCode(code: string) {
     const result = await this.affiliatesService.checkCodeValidity(code);
     return { valid: result.valid, affiliate_name: result.affiliateName };
-  }
-
-  async listActiveProducts() {
-    const products = await this.productsService.findAllActive();
-    return products.map((product) => ({
-      id: product.id,
-      name: product.name,
-      selling_price: product.sellingPrice,
-      coin_amount: product.coinAmount,
-      bonus_coin: product.bonusCoin,
-      flag: product.flag,
-    }));
   }
 
   async getTransactionStatus(transactionId: string) {
@@ -117,40 +105,6 @@ export class TopupService {
     };
   }
 
-  async checkout(dto: CheckoutDto) {
-    const product = await this.productsService.findActiveByIdOrFail(
-      dto.product_id,
-    );
-
-    // A referral code no longer changes the price or coin (client via Ricky
-    // 2026-11-05): the customer pays full price and gets the product's
-    // normal coin + bonus; the bonus is charged to the affiliate's
-    // commission at payout instead (see handleInvoicePaid).
-    const transaction = await this.transactionsService.createPending({
-      product,
-      targetUserId: dto.target_user_id,
-      targetZoneId: dto.target_zone_id,
-      referralCode: dto.affiliate_code,
-    });
-
-    const invoice = await this.linkQuService.createInvoice({
-      externalId: transaction.id,
-      amount: Number(product.sellingPrice),
-      description: `Top-up ${product.name} for ${dto.target_user_id}`,
-    });
-
-    await this.transactionsService.attachLinkQuReference(
-      transaction.id,
-      invoice.invoiceId,
-    );
-
-    return {
-      transaction_id: transaction.id,
-      linkqu_reference: invoice.invoiceId,
-      invoice_url: invoice.invoiceUrl,
-    };
-  }
-
   async getPublicConfig() {
     const settings = await this.settingsService.get();
     return {
@@ -181,6 +135,7 @@ export class TopupService {
     const settings = await this.settingsService.get();
     const pricing = calculateCustomAmountPricing(
       amount,
+      await this.bonusTiersService.findAll(),
       Number(settings.customAmountMarginRate),
       settings.customAmountExtraCoinEnabled,
     );
@@ -203,6 +158,7 @@ export class TopupService {
     const { coinAmount, bonusCoin, extraCoin, costBasis } =
       calculateCustomAmountPricing(
         dto.amount,
+        await this.bonusTiersService.findAll(),
         Number(settings.customAmountMarginRate),
         settings.customAmountExtraCoinEnabled,
       );
@@ -218,6 +174,7 @@ export class TopupService {
         grossAmount: dto.amount.toFixed(2),
         coinAmount: String(coinAmount),
         costBasis: String(costBasis),
+        bonusCoin: String(bonusCoin),
         targetUserId: dto.target_user_id,
         targetZoneId: dto.target_zone_id,
         referralCode: dto.affiliate_code,
@@ -268,6 +225,9 @@ export class TopupService {
       return;
     }
 
+    // Fixed-catalog products were removed 2026-11-09 (custom amount +
+    // bonus_tiers only); the product branch stays so a product transaction
+    // still pending at deploy time completes correctly.
     let coin: number;
     // The bonus coin the customer gets on top of the nominal - charged to
     // the referring affiliate's commission (client via Ricky 2026-11-05).
@@ -283,7 +243,8 @@ export class TopupService {
       providerProductCode = transaction.product.providerCode;
     } else if (transaction.coinAmount && transaction.costBasis) {
       coin = Number(transaction.coinAmount);
-      bonusCoin = bonusForAmount(Number(transaction.grossAmount));
+      // Snapshotted at checkout, not recomputed: tiers may have changed since.
+      bonusCoin = Number(transaction.bonusCoin ?? 0);
       costBasis = transaction.costBasis;
       providerProductCode = 'custom-amount';
     } else {
@@ -305,7 +266,7 @@ export class TopupService {
     });
 
     if (injectResult.success) {
-      const commissionPaid = transaction.referralCode
+      const affiliateCommission = transaction.referralCode
         ? await this.affiliatesService.creditCommissionForTransaction({
             referralCode: transaction.referralCode,
             transactionId: transaction.id,
@@ -313,6 +274,18 @@ export class TopupService {
             bonusDeduction: bonusCoin.toFixed(2),
           })
         : '0.00';
+      // The affiliate's super affiliate (if any) is paid by the platform on
+      // top of - never out of - the affiliate's commission.
+      const superAffiliateCommission = transaction.referralCode
+        ? await this.superAffiliatesService.creditCommissionForTransaction({
+            referralCode: transaction.referralCode,
+            transactionId: transaction.id,
+            grossAmount: transaction.grossAmount,
+          })
+        : '0.00';
+      const commissionPaid = (
+        Number(affiliateCommission) + Number(superAffiliateCommission)
+      ).toFixed(2);
 
       let linkQuFee = '0.00';
       try {

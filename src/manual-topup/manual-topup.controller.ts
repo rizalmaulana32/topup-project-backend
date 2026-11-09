@@ -24,6 +24,7 @@ import { Roles } from '../auth/roles.decorator';
 import { RolesGuard } from '../auth/roles.guard';
 import { AuthenticatedUser } from '../auth/types/jwt-payload';
 import { UserRole } from '../users/entities/user.entity';
+import { ResetAffiliatePasswordDto } from '../admin/dto/reset-affiliate-password.dto';
 import { AdjustCoinLimitDto } from './dto/adjust-coin-limit.dto';
 import { CreateAdminDto } from './dto/create-admin.dto';
 import { CreateManualTopupDto } from './dto/create-manual-topup.dto';
@@ -155,6 +156,25 @@ export class ManualTopupController {
       referralCode: dto.referral_code,
     });
     return { success: true, data: toAdminResponse(profile) };
+  }
+
+  @Post('manual-admins/:id/reset-password')
+  @ApiOperation({
+    summary:
+      "Reset an admin's password (same as affiliates / super affiliates) - for an admin who is locked out",
+  })
+  @ApiParam({
+    name: 'id',
+    description: 'The admin PROFILE ID from GET /admin/manual-admins',
+  })
+  async resetAdminPassword(
+    @Param('id') id: string,
+    @Body() dto: ResetAffiliatePasswordDto,
+  ) {
+    await this.manualTopupService.updateAdmin(id, {
+      password: dto.new_password,
+    });
+    return { success: true };
   }
 
   @Delete('manual-admins/:id')

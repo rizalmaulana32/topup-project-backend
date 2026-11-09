@@ -66,6 +66,21 @@ export class Transaction {
   })
   costBasis: string | null;
 
+  /**
+   * Tier bonus (pre-cut, already inside coinAmount) shown to the customer
+   * at checkout for a custom-amount transaction - snapshotted so the
+   * affiliate commission deduction at payment uses this exact number even
+   * if a superadmin edits bonus_tiers in between. Null for products.
+   */
+  @Column({
+    name: 'bonus_coin',
+    type: 'decimal',
+    precision: 14,
+    scale: 2,
+    nullable: true,
+  })
+  bonusCoin: string | null;
+
   @Column({ name: 'target_user_id' })
   targetUserId: string;
 

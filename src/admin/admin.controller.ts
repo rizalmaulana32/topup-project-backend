@@ -27,6 +27,7 @@ import { toJakartaTime, toXlsxFile } from '../common/utils/xlsx.util';
 import {
   AffiliatesService,
   toLinkedAdmin,
+  toLinkedSuperAffiliate,
 } from '../affiliates/affiliates.service';
 import {
   CommissionWithdrawal,
@@ -37,6 +38,8 @@ import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { Roles } from '../auth/roles.decorator';
 import { RolesGuard } from '../auth/roles.guard';
 import { AuthenticatedUser } from '../auth/types/jwt-payload';
+import { BonusTiersService } from '../bonus-tiers/bonus-tiers.service';
+import { BonusTier } from '../bonus-tiers/entities/bonus-tier.entity';
 import { ContactService } from '../contact/contact.service';
 import { LinkQuService } from '../linkqu/linkqu.service';
 import { PlatformService } from '../platform/platform.service';
@@ -45,7 +48,6 @@ import type {
   CheckIdResult,
   ProviderTopUpPort,
 } from '../provider/provider-top-up.port';
-import { ProductsService } from '../products/products.service';
 import { SettingsService } from '../settings/settings.service';
 import { TopupService } from '../topup/topup.service';
 import { PaymentStatus } from '../transactions/entities/transaction.entity';
@@ -54,12 +56,13 @@ import { UserRole } from '../users/entities/user.entity';
 import { AdjustCommissionBalanceDto } from './dto/adjust-commission-balance.dto';
 import { ApproveAffiliateDto } from './dto/approve-affiliate.dto';
 import { CommissionSummaryDto } from './dto/commission-summary.dto';
-import { CreateProductDto } from './dto/create-product.dto';
+import { CreateBonusTierDto } from './dto/create-bonus-tier.dto';
 import { ListAffiliatesDto } from './dto/list-affiliates.dto';
 import { ListContactMessagesDto } from './dto/list-contact-messages.dto';
 import { ListPlatformWithdrawalsDto } from '../platform/dto/list-platform-withdrawals.dto';
 import { ListTransactionsDto } from './dto/list-transactions.dto';
 import { ListWithdrawalsDto } from './dto/list-withdrawals.dto';
+import { MoveUplineDto } from './dto/move-upline.dto';
 import { PlatformWithdrawDto } from '../platform/dto/platform-withdraw.dto';
 import { ProcessWithdrawalDto } from './dto/process-withdrawal.dto';
 import { UpdateReferralCodeDto } from './dto/update-referral-code.dto';
@@ -67,7 +70,7 @@ import { ProviderCoinTransferDto } from './dto/provider-coin-transfer.dto';
 import { ResetAffiliatePasswordDto } from './dto/reset-affiliate-password.dto';
 import { SetTieredCommissionDto } from './dto/set-tiered-commission.dto';
 import { UpdateCommissionRateDto } from './dto/update-commission-rate.dto';
-import { UpdateProductDto } from './dto/update-product.dto';
+import { UpdateBonusTierDto } from './dto/update-bonus-tier.dto';
 import { UpdateSettingsDto } from './dto/update-settings.dto';
 
 @ApiTags('admin')
@@ -81,7 +84,6 @@ export class AdminController {
   constructor(
     private readonly affiliatesService: AffiliatesService,
     private readonly settingsService: SettingsService,
-    private readonly productsService: ProductsService,
     private readonly transactionsService: TransactionsService,
     private readonly contactService: ContactService,
     @Inject(PROVIDER_TOP_UP_PORT)
@@ -90,6 +92,7 @@ export class AdminController {
     private readonly platformService: PlatformService,
     private readonly topupService: TopupService,
     private readonly configService: ConfigService,
+    private readonly bonusTiersService: BonusTiersService,
   ) {}
 
   @Get('affiliates')
@@ -104,6 +107,7 @@ export class AdminController {
     const result = await this.affiliatesService.findAllProfiles({
       status: query.status,
       adminProfileId: query.admin_profile_id,
+      superAffiliateProfileId: query.super_affiliate_id,
       search: query.search,
       limit: query.limit ?? 20,
       offset: query.offset ?? 0,
@@ -124,6 +128,9 @@ export class AdminController {
           status: profile.user.status,
           affiliate_code: profile.affiliateCode,
           admin: toLinkedAdmin(profile.adminProfile),
+          super_affiliate: toLinkedSuperAffiliate(
+            profile.superAffiliateProfile,
+          ),
           phone_number: profile.phoneNumber,
           commission_rate: profile.commissionRate,
           // With a date range, commission_balance is the commission earned from
@@ -193,6 +200,33 @@ export class AdminController {
         profile_id: profile.id,
         affiliate_code: profile.affiliateCode,
         approved_at: profile.approvedAt,
+      },
+    };
+  }
+
+  @Patch('affiliates/:id/upline')
+  @ApiOperation({
+    summary:
+      'Move an affiliate under another admin or super affiliate by its referral_code, or detach with referral_code: null. An affiliate has one upline only; only future transactions are affected.',
+  })
+  @ApiParam({
+    name: 'id',
+    description: 'The affiliate PROFILE ID (not user_id).',
+  })
+  async moveAffiliateUpline(
+    @Param('id') id: string,
+    @Body() dto: MoveUplineDto,
+  ) {
+    const profile = await this.affiliatesService.moveUpline(
+      id,
+      dto.referral_code,
+    );
+    return {
+      success: true,
+      data: {
+        profile_id: profile.id,
+        admin: toLinkedAdmin(profile.adminProfile),
+        super_affiliate: toLinkedSuperAffiliate(profile.superAffiliateProfile),
       },
     };
   }
@@ -412,51 +446,53 @@ export class AdminController {
     };
   }
 
-  @Get('products')
-  @ApiOperation({ summary: 'List the full product catalog' })
-  async listProducts() {
-    const products = await this.productsService.findAll();
-    return { success: true, data: products };
-  }
-
-  @Post('products')
-  @ApiOperation({ summary: 'Add a product to the catalog' })
-  async createProduct(@Body() dto: CreateProductDto) {
-    const product = await this.productsService.create({
-      name: dto.name,
-      providerCode: dto.provider_code,
-      basePrice: dto.base_price,
-      sellingPrice: dto.selling_price,
-      coinAmount: dto.coin_amount,
-      bonusCoin: dto.bonus_coin,
-      flag: dto.flag,
-    });
-    return { success: true, data: product };
-  }
-
-  @Patch('products/:id')
-  @ApiOperation({ summary: 'Edit a product (price, name, status, etc.)' })
-  async updateProduct(@Param('id') id: string, @Body() dto: UpdateProductDto) {
-    const product = await this.productsService.update(id, {
-      name: dto.name,
-      providerCode: dto.provider_code,
-      basePrice: dto.base_price,
-      sellingPrice: dto.selling_price,
-      coinAmount: dto.coin_amount,
-      bonusCoin: dto.bonus_coin,
-      flag: dto.flag,
-      status: dto.status,
-    });
-    return { success: true, data: product };
-  }
-
-  @Delete('products/:id')
+  @Get('bonus-tiers')
   @ApiOperation({
     summary:
-      'Soft-delete a product (hidden from listings, not removed from the database)',
+      'List custom-amount bonus tiers (min_amount inclusive, max_amount exclusive, null = no upper bound), ordered by min_amount',
   })
-  async deleteProduct(@Param('id') id: string) {
-    await this.productsService.softDelete(id);
+  async listBonusTiers() {
+    const tiers = await this.bonusTiersService.findAll();
+    return { success: true, data: tiers.map(toBonusTierResponse) };
+  }
+
+  @Post('bonus-tiers')
+  @ApiOperation({
+    summary:
+      'Add a bonus tier: bonus = floor(amount x bonus_percent / 100) for min_amount <= amount < max_amount. Rejected with 400 if it overlaps any other tier, inactive ones included.',
+  })
+  async createBonusTier(@Body() dto: CreateBonusTierDto) {
+    const tier = await this.bonusTiersService.create({
+      minAmount: dto.min_amount,
+      maxAmount: dto.max_amount,
+      bonusPercent: dto.bonus_percent,
+      isActive: dto.is_active,
+    });
+    return { success: true, data: toBonusTierResponse(tier) };
+  }
+
+  @Patch('bonus-tiers/:id')
+  @ApiOperation({
+    summary:
+      'Edit a bonus tier (all fields optional; max_amount: null removes the upper bound)',
+  })
+  async updateBonusTier(
+    @Param('id') id: string,
+    @Body() dto: UpdateBonusTierDto,
+  ) {
+    const tier = await this.bonusTiersService.update(id, {
+      minAmount: dto.min_amount,
+      maxAmount: dto.max_amount,
+      bonusPercent: dto.bonus_percent,
+      isActive: dto.is_active,
+    });
+    return { success: true, data: toBonusTierResponse(tier) };
+  }
+
+  @Delete('bonus-tiers/:id')
+  @ApiOperation({ summary: 'Delete a bonus tier' })
+  async deleteBonusTier(@Param('id') id: string) {
+    await this.bonusTiersService.remove(id);
     return { success: true };
   }
 
@@ -627,7 +663,7 @@ export class AdminController {
   @Get('transactions/export')
   @ApiOperation({
     summary:
-      'Download the successful (paid) transactions as an .xlsx file. Filters: date_from/date_to, product_id, referral_code, amount_min/amount_max, as in GET /transactions; status is always paid, and limit/offset are ignored (max 10000 rows, newest first). Built in memory per request, nothing is stored on the server.',
+      'Download the successful (paid) transactions as an .xlsx file. Filters: date_from/date_to, referral_code, amount_min/amount_max, as in GET /transactions; status is always paid, and limit/offset are ignored (max 10000 rows, newest first). Built in memory per request, nothing is stored on the server.',
   })
   async exportTransactions(
     @Query() query: ListTransactionsDto,
@@ -637,7 +673,6 @@ export class AdminController {
       status: PaymentStatus.PAID,
       dateFrom: query.date_from,
       dateTo: query.date_to,
-      productId: query.product_id,
       referralCode: query.referral_code,
       amountMin: query.amount_min,
       amountMax: query.amount_max,
@@ -677,7 +712,6 @@ export class AdminController {
       status: query.status,
       dateFrom: query.date_from,
       dateTo: query.date_to,
-      productId: query.product_id,
       referralCode: query.referral_code,
       amountMin: query.amount_min,
       amountMax: query.amount_max,
@@ -991,3 +1025,13 @@ const TRANSACTION_EXPORT_COLUMNS: [string, string][] = [
   ['provider_status', 'Provider Status'],
   ['linkqu_reference', 'LinkQu Reference'],
 ];
+
+function toBonusTierResponse(tier: BonusTier) {
+  return {
+    id: Number(tier.id),
+    min_amount: tier.minAmount,
+    max_amount: tier.maxAmount,
+    bonus_percent: tier.bonusPercent,
+    is_active: tier.isActive,
+  };
+}

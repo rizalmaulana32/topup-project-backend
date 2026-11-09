@@ -21,6 +21,7 @@
     "typeorm": "typeorm-ts-node-commonjs",
     "migration:generate": "npm run typeorm -- migration:generate -d src/data-source.ts",
     "migration:revert": "npm run typeorm -- migration:revert -d src/data-source.ts",
+    "seed:super-affiliates": "ts-node scripts/seed-super-affiliates.ts",
     "migration:run": "typeorm migration:run -d dist/data-source.js"
   },
   "dependencies": {

@@ -18,6 +18,7 @@ import { AuthenticatedUser } from '../auth/types/jwt-payload';
 import { UserRole } from '../users/entities/user.entity';
 import { AffiliatesService } from './affiliates.service';
 import { CheckEmailDto } from './dto/check-email.dto';
+import { CheckReferralCodeDto } from './dto/check-referral-code.dto';
 import { RegisterAffiliateDto } from './dto/register-affiliate.dto';
 import { UpdateBankDetailsDto } from './dto/update-bank-details.dto';
 import { WithdrawDto } from './dto/withdraw.dto';
@@ -49,6 +50,20 @@ export class AffiliatesController {
       query.email,
     );
     return { success: true, data: { registered } };
+  }
+
+  @Get('check-referral-code')
+  @UseGuards(ThrottlerGuard)
+  @Throttle({ default: { limit: 10, ttl: 60000 } })
+  @ApiOperation({
+    summary:
+      'Check the optional registration referral code (admin or super affiliate) before submitting POST /affiliate/register',
+  })
+  async checkReferralCode(@Query() query: CheckReferralCodeDto) {
+    const data = await this.affiliatesService.checkRegistrationReferralCode(
+      query.code,
+    );
+    return { success: true, data };
   }
 
   @Get('dashboard')

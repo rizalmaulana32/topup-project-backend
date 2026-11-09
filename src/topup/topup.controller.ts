@@ -1,7 +1,6 @@
 import { Body, Controller, Get, Param, Post, Query } from '@nestjs/common';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import { CheckIdDto } from './dto/check-id.dto';
-import { CheckoutDto } from './dto/checkout.dto';
 import { CheckoutCustomAmountDto } from './dto/checkout-custom-amount.dto';
 import { EstimateCustomAmountDto } from './dto/estimate-custom-amount.dto';
 import { TopupService } from './topup.service';
@@ -10,13 +9,6 @@ import { TopupService } from './topup.service';
 @Controller('topup')
 export class TopupController {
   constructor(private readonly topupService: TopupService) {}
-
-  @Get('products')
-  @ApiOperation({ summary: 'List active coin packages customers can buy' })
-  async listProducts() {
-    const data = await this.topupService.listActiveProducts();
-    return { success: true, data };
-  }
 
   @Get('affiliate-code/:code')
   @ApiOperation({
@@ -35,15 +27,6 @@ export class TopupController {
     return { success: true, data };
   }
 
-  @Post('checkout')
-  @ApiOperation({
-    summary: 'Start a purchase and get a LinkQu payment link to pay',
-  })
-  async checkout(@Body() dto: CheckoutDto) {
-    const data = await this.topupService.checkout(dto);
-    return { success: true, data };
-  }
-
   @Get('config')
   @ApiOperation({
     summary:
@@ -57,7 +40,7 @@ export class TopupController {
   @Get('estimate')
   @ApiOperation({
     summary:
-      'Calculator for the adjustable-amount checkout form: pass exactly one of `amount` or `coin` (both are aliases for the same nominal rupiah paid - coin and rupiah are the same number by design, there is no reverse/target calculation). Returns amount, coin_amount (base + bonus tier, if the nominal qualifies, + 0.7% extra coin when custom_amount_extra_coin_enabled is on - off by default), bonus_coin and extra_coin. Uses the exact same formula checkout-custom charges, so this preview never drifts out of sync.',
+      'Calculator for the adjustable-amount checkout form: pass exactly one of `amount` or `coin` (both are aliases for the same nominal rupiah paid - coin and rupiah are the same number by design, there is no reverse/target calculation). Returns amount, coin_amount (base + the matching active bonus tier % from /admin/bonus-tiers, floored, + 0.7% extra coin when custom_amount_extra_coin_enabled is on - off by default), bonus_coin and extra_coin. Uses the exact same formula checkout-custom charges, so this preview never drifts out of sync.',
   })
   async estimateCustomAmount(@Query() dto: EstimateCustomAmountDto) {
     const data = await this.topupService.estimateCustomAmount(dto);
@@ -67,7 +50,7 @@ export class TopupController {
   @Post('checkout-custom')
   @ApiOperation({
     summary:
-      'Start a purchase with a customer-typed rupiah nominal (`amount`) instead of a fixed product (minimum Rp 10,000) - never send coin directly, the backend computes it. Coin payout = amount (1:1) plus the published bonus tier for amounts >= Rp 350,000 plus an extra 0.7% of the amount only when custom_amount_extra_coin_enabled is on (off by default; see custom-amount-pricing.util.ts), minus the admin-configured custom_amount_margin_rate (0% by default). Response includes coin_amount (final total, what gets sent once LinkQu confirms payment), bonus_coin (tier bonus) and extra_coin (the 0.7%) separately.',
+      'Start a purchase with a customer-typed rupiah nominal (`amount`, minimum Rp 10,000) - the only checkout since fixed products were removed - never send coin directly, the backend computes it. Coin payout = amount (1:1) plus the matching active bonus tier % (managed via /admin/bonus-tiers, floored to a whole coin) plus an extra 0.7% of the amount only when custom_amount_extra_coin_enabled is on (off by default; see custom-amount-pricing.util.ts), minus the admin-configured custom_amount_margin_rate (0% by default). Response includes coin_amount (final total, what gets sent once LinkQu confirms payment), bonus_coin (tier bonus) and extra_coin (the 0.7%) separately.',
   })
   async checkoutCustomAmount(@Body() dto: CheckoutCustomAmountDto) {
     const data = await this.topupService.checkoutCustomAmount(dto);

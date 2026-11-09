@@ -53,7 +53,9 @@ describe('Manual top-up (e2e)', () => {
     await app.init();
 
     userRepository = moduleFixture.get(getRepositoryToken(User));
-    adminProfileRepository = moduleFixture.get(getRepositoryToken(AdminProfile));
+    adminProfileRepository = moduleFixture.get(
+      getRepositoryToken(AdminProfile),
+    );
     manualTopupRepository = moduleFixture.get(getRepositoryToken(ManualTopup));
 
     await userRepository.query(
@@ -113,6 +115,42 @@ describe('Manual top-up (e2e)', () => {
     manualAdminToken = await login(
       'manual-admin-1.e2e@example.com',
       'manual-admin-password',
+    );
+  });
+
+  it('lets the superadmin reset an admin password; the old one stops working', async () => {
+    await request(app.getHttpServer())
+      .post(
+        `/api/v1/admin/manual-admins/${manualAdminProfileId}/reset-password`,
+      )
+      .set('Authorization', `Bearer ${manualAdminToken}`)
+      .send({ new_password: 'reset-admin-password' })
+      .expect(403);
+    await request(app.getHttpServer())
+      .post(
+        `/api/v1/admin/manual-admins/${manualAdminProfileId}/reset-password`,
+      )
+      .set('Authorization', `Bearer ${superadminToken}`)
+      .send({ new_password: 'short' })
+      .expect(400);
+    await request(app.getHttpServer())
+      .post(
+        `/api/v1/admin/manual-admins/${manualAdminProfileId}/reset-password`,
+      )
+      .set('Authorization', `Bearer ${superadminToken}`)
+      .send({ new_password: 'reset-admin-password' })
+      .expect(201);
+
+    await request(app.getHttpServer())
+      .post('/api/v1/auth/login')
+      .send({
+        email: 'manual-admin-1.e2e@example.com',
+        password: 'manual-admin-password',
+      })
+      .expect(401);
+    manualAdminToken = await login(
+      'manual-admin-1.e2e@example.com',
+      'reset-admin-password',
     );
   });
 
@@ -291,9 +329,7 @@ describe('Manual top-up (e2e)', () => {
       data: { items: { momo_user_id: string }[] };
     };
     const momoIds = body.data.items.map((item) => item.momo_user_id);
-    expect(momoIds).toEqual(
-      expect.arrayContaining(['88887777', '12340000']),
-    );
+    expect(momoIds).toEqual(expect.arrayContaining(['88887777', '12340000']));
   });
 
   it('lists manual-send admin accounts with their coin usage', async () => {

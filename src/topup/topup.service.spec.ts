@@ -1,8 +1,9 @@
 import { BadRequestException, NotFoundException } from '@nestjs/common';
 import type { ProviderTopUpPort } from '../provider/provider-top-up.port';
 import { AffiliatesService } from '../affiliates/affiliates.service';
+import { BonusTiersService } from '../bonus-tiers/bonus-tiers.service';
+import { SuperAffiliatesService } from '../super-affiliates/super-affiliates.service';
 import { PlatformService } from '../platform/platform.service';
-import { ProductsService } from '../products/products.service';
 import { SettingsService } from '../settings/settings.service';
 import { TransactionsService } from '../transactions/transactions.service';
 import { LinkQuService } from '../linkqu/linkqu.service';
@@ -19,13 +20,9 @@ describe('TopupService', () => {
   let injectCoinMock: jest.Mock;
   let getBalanceMock: jest.Mock;
   let provider: jest.Mocked<ProviderTopUpPort>;
-  let productsService: jest.Mocked<
-    Pick<ProductsService, 'findActiveByIdOrFail'>
-  >;
   let transactionsService: jest.Mocked<
     Pick<
       TransactionsService,
-      | 'createPending'
       | 'createPendingCustomAmount'
       | 'attachLinkQuReference'
       | 'findByExternalId'
@@ -52,6 +49,8 @@ describe('TopupService', () => {
     Pick<PlatformService, 'creditRevenueForTransaction'>
   >;
   let settingsService: jest.Mocked<Pick<SettingsService, 'get'>>;
+  let bonusTiersService: jest.Mocked<Pick<BonusTiersService, 'findAll'>>;
+  let creditSuperAffiliateMock: jest.Mock;
   let service: TopupService;
 
   const product = {
@@ -76,9 +75,7 @@ describe('TopupService', () => {
       injectCoin: injectCoinMock,
       getBalance: getBalanceMock,
     };
-    productsService = { findActiveByIdOrFail: jest.fn() };
     transactionsService = {
-      createPending: jest.fn(),
       createPendingCustomAmount: jest.fn(),
       attachLinkQuReference: jest.fn(),
       findByExternalId: jest.fn(),
@@ -105,22 +102,43 @@ describe('TopupService', () => {
       creditRevenueForTransaction: creditRevenueMock,
     };
     settingsService = {
-      get: jest
-        .fn()
-        .mockResolvedValue({
-          customAmountMarginRate: '0',
-          customerDiscountRate: '0',
-        }),
+      get: jest.fn().mockResolvedValue({
+        customAmountMarginRate: '0',
+        customerDiscountRate: '0',
+      }),
+    };
+
+    creditSuperAffiliateMock = jest.fn().mockResolvedValue('0.00');
+
+    // Same as the migration seed.
+    bonusTiersService = {
+      findAll: jest.fn().mockResolvedValue([
+        {
+          minAmount: 350000,
+          maxAmount: 1000000,
+          bonusPercent: 1,
+          isActive: true,
+        },
+        {
+          minAmount: 1000000,
+          maxAmount: null,
+          bonusPercent: 2,
+          isActive: true,
+        },
+      ]),
     };
 
     service = new TopupService(
       provider,
-      productsService as unknown as ProductsService,
       transactionsService as unknown as TransactionsService,
       linkQuService as unknown as LinkQuService,
       affiliatesService as unknown as AffiliatesService,
       platformService as unknown as PlatformService,
       settingsService as unknown as SettingsService,
+      bonusTiersService as unknown as BonusTiersService,
+      {
+        creditCommissionForTransaction: creditSuperAffiliateMock,
+      } as unknown as SuperAffiliatesService,
     );
   });
 
@@ -216,76 +234,6 @@ describe('TopupService', () => {
     });
   });
 
-  describe('checkout', () => {
-    it('creates a pending transaction, requests a LinkQu payment link, and attaches it for the full selling price', async () => {
-      productsService.findActiveByIdOrFail.mockResolvedValue(product);
-      transactionsService.createPending.mockResolvedValue({
-        id: 'TRX-20260805-0001',
-      } as any);
-      linkQuService.createInvoice.mockResolvedValue({
-        invoiceId: '715',
-        invoiceUrl:
-          'https://cognos.linkqu.id/pay/0945572d-116b-4fc8-aa05-c43caa358491',
-        status: '00',
-      });
-
-      const result = await service.checkout({
-        product_id: '1',
-        target_user_id: '1',
-        target_zone_id: '99',
-        affiliate_code: 'AFF123',
-      });
-
-      expect(transactionsService.createPending).toHaveBeenCalledWith({
-        product,
-        targetUserId: '1',
-        targetZoneId: '99',
-        referralCode: 'AFF123',
-      });
-      expect(linkQuService.createInvoice).toHaveBeenCalledWith({
-        externalId: 'TRX-20260805-0001',
-        amount: 20000,
-        description: 'Top-up 120 Diamonds for 1',
-      });
-      expect(transactionsService.attachLinkQuReference).toHaveBeenCalledWith(
-        'TRX-20260805-0001',
-        '715',
-      );
-      expect(result).toEqual({
-        transaction_id: 'TRX-20260805-0001',
-        linkqu_reference: '715',
-        invoice_url:
-          'https://cognos.linkqu.id/pay/0945572d-116b-4fc8-aa05-c43caa358491',
-      });
-    });
-
-    it('never discounts the price for a valid referral code - the bonus is charged to the affiliate at payout instead (2026-11-05)', async () => {
-      productsService.findActiveByIdOrFail.mockResolvedValue(product);
-      checkCodeValidityMock.mockResolvedValue({
-        valid: true,
-        affiliateName: 'Commission Affiliate',
-      });
-      transactionsService.createPending.mockResolvedValue({
-        id: 'TRX-20260805-0003',
-      } as any);
-      linkQuService.createInvoice.mockResolvedValue({
-        invoiceId: '717',
-        invoiceUrl: 'https://cognos.linkqu.id/pay/y',
-        status: '00',
-      });
-
-      await service.checkout({
-        product_id: '1',
-        target_user_id: '1',
-        affiliate_code: 'AFF123',
-      });
-
-      expect(linkQuService.createInvoice).toHaveBeenCalledWith(
-        expect.objectContaining({ amount: 20000 }),
-      );
-    });
-  });
-
   describe('getPublicConfig', () => {
     it('reports the extra-coin toggle from settings, its rate and the minimum amount', async () => {
       settingsService.get.mockResolvedValue({
@@ -316,11 +264,11 @@ describe('TopupService', () => {
       const result = await service.estimateCustomAmount({ coin: 370000 });
 
       // 370000 is itself the nominal (coin and rupiah are the same input
-      // by design) - it qualifies for the 350k tier -> +3500 bonus, +2590 (0.7%) extra.
+      // by design) - 1% tier -> +3700 bonus, +2590 (0.7%) extra.
       expect(result).toEqual({
         amount: 370000,
-        coin_amount: 376090,
-        bonus_coin: 3500,
+        coin_amount: 376290,
+        bonus_coin: 3700,
         extra_coin: 2590,
       });
     });
@@ -378,6 +326,7 @@ describe('TopupService', () => {
         grossAmount: '25000.00',
         coinAmount: '25175',
         costBasis: '25175',
+        bonusCoin: '0',
         targetUserId: '1',
         targetZoneId: '99',
         referralCode: 'AFF123',
@@ -412,11 +361,15 @@ describe('TopupService', () => {
         target_user_id: '1',
       });
 
-      // 500k tier -> +5,000 bonus
+      // 1% tier -> +5,000 bonus, snapshotted on the transaction
       expect(
         transactionsService.createPendingCustomAmount,
       ).toHaveBeenCalledWith(
-        expect.objectContaining({ coinAmount: '508500', costBasis: '508500' }),
+        expect.objectContaining({
+          coinAmount: '508500',
+          costBasis: '508500',
+          bonusCoin: '5000',
+        }),
       );
     });
 
@@ -535,7 +488,7 @@ describe('TopupService', () => {
       });
     });
 
-    it('charges the custom-amount tier bonus to the affiliate commission (Rp1.000.000 -> bonus 20.000 deducted)', async () => {
+    it('charges the bonus snapshotted at checkout to the affiliate commission, not one recomputed from the current tiers', async () => {
       const transaction = {
         id: 'TRX-20261105-0010',
         paymentStatus: PaymentStatus.PENDING,
@@ -544,8 +497,10 @@ describe('TopupService', () => {
         referralCode: 'HANABI',
         grossAmount: '1000000.00',
         product: null,
-        coinAmount: '1020000',
-        costBasis: '1020000',
+        coinAmount: '1015000',
+        costBasis: '1015000',
+        // Shown at checkout; current tiers would give 20000.
+        bonusCoin: '15000.00',
       };
       transactionsService.findByExternalId.mockResolvedValue(
         transaction as any,
@@ -563,11 +518,12 @@ describe('TopupService', () => {
 
       await service.handleInvoicePaid('TRX-20261105-0010');
 
+      expect(bonusTiersService.findAll).not.toHaveBeenCalled();
       expect(creditCommissionMock).toHaveBeenCalledWith({
         referralCode: 'HANABI',
         transactionId: 'TRX-20261105-0010',
         originalAmount: '1000000.00',
-        bonusDeduction: '20000.00',
+        bonusDeduction: '15000.00',
       });
     });
 
@@ -593,7 +549,7 @@ describe('TopupService', () => {
     });
   });
 
-  describe('handleInvoicePaid (product-based)', () => {
+  describe('handleInvoicePaid (legacy product transaction still pending at deploy)', () => {
     it('marks the transaction paid, injects coin, and credits platform revenue (no referral code, no commission credit)', async () => {
       const transaction = {
         id: 'TRX-20260805-0001',
@@ -718,6 +674,37 @@ describe('TopupService', () => {
         commissionPaid: '2000.00',
         providerFee: '1000.00',
       });
+    });
+
+    it('adds the super affiliate commission to commissionPaid so platform revenue shrinks by both', async () => {
+      transactionsService.findByExternalId.mockResolvedValue({
+        id: 'TRX-SA-1',
+        paymentStatus: PaymentStatus.PENDING,
+        targetUserId: '1',
+        targetZoneId: '99',
+        referralCode: 'AFF-ABC123',
+        grossAmount: '20000.00',
+        product,
+      } as any);
+      injectCoinMock.mockResolvedValue({ success: true, response: 'ok' });
+      creditCommissionMock.mockResolvedValue('2000.00');
+      creditSuperAffiliateMock.mockResolvedValue('200.00');
+      linkQuService.checkTransactionStatus.mockResolvedValue({
+        statusCode: 'success',
+        statusMessage: 'SUCCESS',
+        fee: '1000.00',
+      });
+
+      await service.handleInvoicePaid('TRX-SA-1');
+
+      expect(creditSuperAffiliateMock).toHaveBeenCalledWith({
+        referralCode: 'AFF-ABC123',
+        transactionId: 'TRX-SA-1',
+        grossAmount: '20000.00',
+      });
+      expect(creditRevenueMock).toHaveBeenCalledWith(
+        expect.objectContaining({ commissionPaid: '2200.00' }),
+      );
     });
 
     it("charges the product's bonusCoin to the affiliate commission for a fixed-catalog transaction", async () => {

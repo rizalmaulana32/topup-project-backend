@@ -29,6 +29,14 @@ export class ListTransactionsDto {
   @IsEnum(PaymentStatus)
   status?: PaymentStatus;
 
+  /**
+   * Ignored: fixed products were removed (2026-11-09). Still accepted so an
+   * older frontend that sends `product_id=` doesn't get a 400.
+   */
+  @IsOptional()
+  @IsString()
+  product_id?: string;
+
   // "Dari Tanggal" - inclusive start of the created_at range, e.g. 2026-11-01.
   @IsOptional()
   @IsDateString()
@@ -38,11 +46,6 @@ export class ListTransactionsDto {
   @IsOptional()
   @IsDateString()
   date_to?: string;
-
-  // "Produk" filter in the admin UI.
-  @IsOptional()
-  @IsString()
-  product_id?: string;
 
   // "Referral Code" filter in the admin UI.
   @IsOptional()

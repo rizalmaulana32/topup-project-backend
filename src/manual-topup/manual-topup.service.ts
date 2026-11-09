@@ -12,10 +12,11 @@ import { Cron, CronExpression } from '@nestjs/schedule';
 import * as bcrypt from 'bcrypt';
 import { DataSource, In, LessThanOrEqual, Repository } from 'typeorm';
 import { AffiliatorProfile } from '../affiliates/entities/affiliator-profile.entity';
+import { generateOrderId } from '../common/utils/id-generator.util';
 import {
-  generateOrderId,
-  generateReferralCode,
-} from '../common/utils/id-generator.util';
+  assertReferralCodeAvailable,
+  generateUniqueReferralCode,
+} from '../common/utils/referral-code.util';
 import { PROVIDER_TOP_UP_PORT } from '../provider/provider-top-up.port';
 import type { ProviderTopUpPort } from '../provider/provider-top-up.port';
 import { UserRole, UserStatus } from '../users/entities/user.entity';
@@ -227,30 +228,13 @@ export class ManualTopupService {
     return profile.id;
   }
 
-  /** Throws if another admin (deleted ones included - the DB constraint covers them) already has the code. */
-  private async assertReferralCodeAvailable(code: string): Promise<string> {
-    const existing = await this.profileRepository.findOne({
-      where: { referralCode: code },
-      withDeleted: true,
-    });
-    if (existing) {
-      throw new ConflictException(`Referral code ${code} is already in use`);
-    }
-    return code;
+  /** Codes are unique across admins, super affiliates and affiliates (deleted ones included). */
+  private assertReferralCodeAvailable(code: string): Promise<string> {
+    return assertReferralCodeAvailable(this.dataSource, code);
   }
 
-  private async generateUniqueReferralCode(): Promise<string> {
-    for (let attempt = 0; attempt < 5; attempt += 1) {
-      const candidate = generateReferralCode('ADM');
-      const existing = await this.profileRepository.findOne({
-        where: { referralCode: candidate },
-        withDeleted: true,
-      });
-      if (!existing) return candidate;
-    }
-    throw new ConflictException(
-      'Could not generate a unique referral code, please retry',
-    );
+  private generateUniqueReferralCode(): Promise<string> {
+    return generateUniqueReferralCode(this.dataSource, 'ADM');
   }
 
   /** amount is added to the current coin_limit - pass a negative number to deduct. */

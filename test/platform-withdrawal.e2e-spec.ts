@@ -15,10 +15,6 @@ import {
   PlatformWithdrawal,
   PlatformWithdrawalStatus,
 } from '../src/platform/entities/platform-withdrawal.entity';
-import {
-  Product,
-  ProductStatus,
-} from '../src/products/entities/product.entity';
 import { PlatformSettings } from '../src/settings/entities/platform-settings.entity';
 import { User, UserRole, UserStatus } from '../src/users/entities/user.entity';
 
@@ -70,13 +66,11 @@ class FakeLinkQuService {
 describe('Platform revenue and withdrawal (e2e)', () => {
   let app: INestApplication<App>;
   let userRepository: Repository<User>;
-  let productRepository: Repository<Product>;
   let settingsRepository: Repository<PlatformSettings>;
   let revenueLogRepository: Repository<PlatformRevenueLog>;
   let withdrawalRepository: Repository<PlatformWithdrawal>;
 
   let superadminToken: string;
-  let product: Product;
 
   async function login(email: string, password: string): Promise<string> {
     const response = await request(app.getHttpServer())
@@ -107,7 +101,6 @@ describe('Platform revenue and withdrawal (e2e)', () => {
     await app.init();
 
     userRepository = moduleFixture.get(getRepositoryToken(User));
-    productRepository = moduleFixture.get(getRepositoryToken(Product));
     settingsRepository = moduleFixture.get(
       getRepositoryToken(PlatformSettings),
     );
@@ -137,16 +130,13 @@ describe('Platform revenue and withdrawal (e2e)', () => {
       'admin-secret-password',
     );
 
-    product = await productRepository.save(
-      productRepository.create({
-        name: '2000 Diamonds (platform e2e)',
-        providerCode: 'ml_2000_platform_e2e',
-        basePrice: '1500000.00',
-        sellingPrice: '2000000.00',
-        coinAmount: '2000.00',
-        status: ProductStatus.ACTIVE,
-      }),
-    );
+    // A 50% platform cut makes a custom-amount top-up earn revenue:
+    // 2000000 + 2% tier bonus = 2040000 coin value -> 1020000 delivered.
+    await request(app.getHttpServer())
+      .patch('/api/v1/admin/settings')
+      .set('Authorization', `Bearer ${superadminToken}`)
+      .send({ custom_amount_margin_rate: 50 })
+      .expect(200);
   });
 
   afterAll(async () => {
@@ -158,8 +148,8 @@ describe('Platform revenue and withdrawal (e2e)', () => {
 
   it('credits platform revenue (gross - cost) when an unreferred purchase is paid and injected', async () => {
     const checkoutResponse = await request(app.getHttpServer())
-      .post('/api/v1/topup/checkout')
-      .send({ product_id: product.id, target_user_id: '12345678' })
+      .post('/api/v1/topup/checkout-custom')
+      .send({ amount: 2000000, target_user_id: '12345678' })
       .expect(201);
 
     const checkoutBody = checkoutResponse.body as {
@@ -182,15 +172,15 @@ describe('Platform revenue and withdrawal (e2e)', () => {
     const settings = await settingsRepository.findOneOrFail({
       where: { id: 1 },
     });
-    // No referral code, so commissionPaid is 0: revenue = 2000000 - 1500000.
-    expect(settings.platformBalance).toBe('500000.00');
+    // No referral code, so commissionPaid is 0: revenue = 2000000 - 1020000.
+    expect(settings.platformBalance).toBe('980000.00');
 
     const logs = await revenueLogRepository.find({
       where: { transactionId },
     });
     expect(logs).toHaveLength(1);
     expect(logs[0].type).toBe(PlatformRevenueLogType.CREDIT);
-    expect(logs[0].amount).toBe('500000.00');
+    expect(logs[0].amount).toBe('980000.00');
   });
 
   it('rejects a withdrawal request when the admin payout account is not set', async () => {
@@ -232,7 +222,7 @@ describe('Platform revenue and withdrawal (e2e)', () => {
       .expect(200);
 
     const body = response.body as { data: { balance: string } };
-    expect(body.data.balance).toBe('500000.00');
+    expect(body.data.balance).toBe('980000.00');
   });
 
   it('rejects a withdrawal exceeding the available platform balance', async () => {
@@ -258,7 +248,7 @@ describe('Platform revenue and withdrawal (e2e)', () => {
     const settings = await settingsRepository.findOneOrFail({
       where: { id: 1 },
     });
-    expect(settings.platformBalance).toBe('300000.00');
+    expect(settings.platformBalance).toBe('780000.00');
   });
 
   it('completes a platform withdrawal immediately on admin approval', async () => {
@@ -283,7 +273,7 @@ describe('Platform revenue and withdrawal (e2e)', () => {
     const settings = await settingsRepository.findOneOrFail({
       where: { id: 1 },
     });
-    expect(settings.platformBalance).toBe('300000.00');
+    expect(settings.platformBalance).toBe('780000.00');
   });
 
   it('lists platform withdrawals for monitoring, filterable by status', async () => {
@@ -339,7 +329,7 @@ describe('Platform revenue and withdrawal (e2e)', () => {
       where: { id: 1 },
     });
     // 300000 (before this request) - 100000 (locked) + 100000 (refund) = 300000
-    expect(settings.platformBalance).toBe('300000.00');
+    expect(settings.platformBalance).toBe('780000.00');
   });
 
   it('rejects a platform withdrawal request and refunds the balance without contacting LinkQu', async () => {
@@ -363,7 +353,7 @@ describe('Platform revenue and withdrawal (e2e)', () => {
     const settings = await settingsRepository.findOneOrFail({
       where: { id: 1 },
     });
-    expect(settings.platformBalance).toBe('300000.00');
+    expect(settings.platformBalance).toBe('780000.00');
   });
 
   it('rejects approving an already-resolved platform withdrawal', async () => {

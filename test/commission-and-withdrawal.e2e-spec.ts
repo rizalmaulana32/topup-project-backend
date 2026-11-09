@@ -15,10 +15,6 @@ import {
   CommissionWithdrawal,
   WithdrawalStatus,
 } from '../src/affiliates/entities/commission-withdrawal.entity';
-import {
-  Product,
-  ProductStatus,
-} from '../src/products/entities/product.entity';
 import { Transaction } from '../src/transactions/entities/transaction.entity';
 import { User, UserRole, UserStatus } from '../src/users/entities/user.entity';
 import { LinkQuService } from '../src/linkqu/linkqu.service';
@@ -59,7 +55,6 @@ describe('Commission crediting and withdrawal (e2e)', () => {
   let app: INestApplication<App>;
   let userRepository: Repository<User>;
   let profileRepository: Repository<AffiliatorProfile>;
-  let productRepository: Repository<Product>;
   let transactionRepository: Repository<Transaction>;
   let commissionLogRepository: Repository<CommissionLog>;
   let withdrawalRepository: Repository<CommissionWithdrawal>;
@@ -68,7 +63,6 @@ describe('Commission crediting and withdrawal (e2e)', () => {
   let affiliateToken: string;
   let affiliateProfileId: string;
   let affiliateCode: string;
-  let product: Product;
 
   async function login(email: string, password: string): Promise<string> {
     const response = await request(app.getHttpServer())
@@ -102,7 +96,6 @@ describe('Commission crediting and withdrawal (e2e)', () => {
     profileRepository = moduleFixture.get(
       getRepositoryToken(AffiliatorProfile),
     );
-    productRepository = moduleFixture.get(getRepositoryToken(Product));
     transactionRepository = moduleFixture.get(getRepositoryToken(Transaction));
     commissionLogRepository = moduleFixture.get(
       getRepositoryToken(CommissionLog),
@@ -164,17 +157,6 @@ describe('Commission crediting and withdrawal (e2e)', () => {
       'commission.affiliate.e2e@example.com',
       'super-secret-password',
     );
-
-    product = await productRepository.save(
-      productRepository.create({
-        name: '2000 Diamonds (e2e)',
-        providerCode: 'ml_2000_e2e',
-        basePrice: '1500000.00',
-        sellingPrice: '2000000.00',
-        coinAmount: '2000.00',
-        status: ProductStatus.ACTIVE,
-      }),
-    );
   });
 
   afterAll(async () => {
@@ -197,9 +179,9 @@ describe('Commission crediting and withdrawal (e2e)', () => {
 
   it('credits commission when a referred purchase is paid and injected', async () => {
     const checkoutResponse = await request(app.getHttpServer())
-      .post('/api/v1/topup/checkout')
+      .post('/api/v1/topup/checkout-custom')
       .send({
-        product_id: product.id,
+        amount: 2500000,
         target_user_id: '12345678',
         affiliate_code: affiliateCode,
       })
@@ -214,7 +196,7 @@ describe('Commission crediting and withdrawal (e2e)', () => {
       .post('/api/v1/webhooks/linkqu/payment')
       .send({
         partner_reff: transactionId,
-        amount: 2000000,
+        amount: 2500000,
         va_number: '7136490000031689',
         username: 'LI307GXIN',
         status: 'SUCCESS',
@@ -225,6 +207,7 @@ describe('Commission crediting and withdrawal (e2e)', () => {
     const transaction = await transactionRepository.findOneOrFail({
       where: { id: transactionId },
     });
+    // 10% of 2.500.000 = 250.000, minus the 2% tier bonus 50.000.
     expect(transaction.affiliateCommission).toBe('200000.00');
 
     const profile = await profileRepository.findOneOrFail({
@@ -597,15 +580,17 @@ describe('Commission crediting and withdrawal (e2e)', () => {
       .send({ enabled: true })
       .expect(200);
 
-    // sellingPrice 2000000 per order; 4 orders (8,000,000) stay under the
-    // 10,000,000 threshold -> 1% each. The 5th order (10,000,000 running
-    // total) crosses it -> 5% on that one, per the non-retroactive rule.
+    // 2,000,000 per order; 4 orders (8,000,000) stay under the 10,000,000
+    // threshold -> 1% each. The 5th order (10,000,000 running total)
+    // crosses it -> 5% on that one, per the non-retroactive rule. Each
+    // order's 2% tier bonus (40,000) is charged to the commission, floored
+    // at 0 (the platform absorbs the rest).
     const commissions: string[] = [];
     for (let i = 0; i < 5; i++) {
       const checkoutResponse = await request(app.getHttpServer())
-        .post('/api/v1/topup/checkout')
+        .post('/api/v1/topup/checkout-custom')
         .send({
-          product_id: product.id,
+          amount: 2000000,
           target_user_id: `tier-test-${i}`,
           affiliate_code: affiliateCode,
         })
@@ -633,11 +618,11 @@ describe('Commission crediting and withdrawal (e2e)', () => {
     }
 
     expect(commissions).toEqual([
-      '20000.00', // 1% of 2,000,000
-      '20000.00',
-      '20000.00',
-      '20000.00',
-      '100000.00', // 5% of 2,000,000 - this order pushed the running total to 10,000,000
+      '0.00', // 1% of 2,000,000 = 20,000, minus 40,000 bonus -> floored at 0
+      '0.00',
+      '0.00',
+      '0.00',
+      '60000.00', // 5% of 2,000,000 = 100,000, minus 40,000 bonus - this order pushed the running total to 10,000,000
     ]);
 
     const profile = await profileRepository.findOneOrFail({

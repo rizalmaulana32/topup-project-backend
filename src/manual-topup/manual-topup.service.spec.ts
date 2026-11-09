@@ -184,6 +184,7 @@ describe('ManualTopupService admin management', () => {
   let profileUpdateMock: jest.Mock;
   let profileSoftDeleteMock: jest.Mock;
   let manualTopupUpdateMock: jest.Mock;
+  let referralCodeQueryMock: jest.Mock;
   let usersService: Record<string, jest.Mock>;
   let service: ManualTopupService;
 
@@ -192,6 +193,7 @@ describe('ManualTopupService admin management', () => {
     profileUpdateMock = jest.fn();
     profileSoftDeleteMock = jest.fn();
     manualTopupUpdateMock = jest.fn();
+    referralCodeQueryMock = jest.fn().mockResolvedValue([]);
     usersService = {
       updateAccount: jest.fn(),
       updateStatus: jest.fn(),
@@ -205,7 +207,7 @@ describe('ManualTopupService admin management', () => {
       } as unknown as Repository<AdminProfile>,
       { update: manualTopupUpdateMock } as unknown as Repository<ManualTopup>,
       {} as unknown as Repository<ManualTopupSend>,
-      {} as unknown as DataSource,
+      { query: referralCodeQueryMock } as unknown as DataSource,
       usersService as unknown as UsersService,
       {} as unknown as ProviderTopUpPort,
     );
@@ -228,10 +230,11 @@ describe('ManualTopupService admin management', () => {
     expect(profileSoftDeleteMock).toHaveBeenCalledWith('5');
   });
 
-  it('updateAdmin rejects a referral code another admin already has', async () => {
-    profileFindOneMock
-      .mockResolvedValueOnce(admin)
-      .mockResolvedValueOnce({ id: '6', referralCode: 'ADM-TAKEN' });
+  it('updateAdmin rejects a referral code another account (admin, super affiliate or affiliate) already has', async () => {
+    profileFindOneMock.mockResolvedValueOnce(admin);
+    referralCodeQueryMock.mockResolvedValueOnce([
+      { table: 'super_affiliate_profiles', id: '6' },
+    ]);
 
     await expect(
       service.updateAdmin('5', { name: 'New', referralCode: 'ADM-TAKEN' }),

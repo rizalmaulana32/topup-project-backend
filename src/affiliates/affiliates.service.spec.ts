@@ -41,6 +41,7 @@ describe('AffiliatesService', () => {
   let withdrawalFindMock: jest.Mock;
   let adminProfileFindOneMock: jest.Mock;
   let findByIdsMock: jest.Mock;
+  let referralCodeQueryMock: jest.Mock;
   let service: AffiliatesService;
 
   const defaultSettings = {
@@ -70,6 +71,8 @@ describe('AffiliatesService', () => {
     withdrawalFindMock = jest.fn().mockResolvedValue([]);
     adminProfileFindOneMock = jest.fn();
     findByIdsMock = jest.fn().mockResolvedValue([]);
+    // findReferralCodeOwner across admins / super affiliates / affiliates: free by default.
+    referralCodeQueryMock = jest.fn().mockResolvedValue([]);
 
     const profileRepository = {
       create: profileCreateMock,
@@ -88,6 +91,7 @@ describe('AffiliatesService', () => {
     } as unknown as Repository<CommissionWithdrawal>;
     const dataSource = {
       getRepository: () => ({ findOne: adminProfileFindOneMock }),
+      query: referralCodeQueryMock,
     } as unknown as DataSource;
     const usersService = {
       createUser: createUserMock,
@@ -209,6 +213,40 @@ describe('AffiliatesService', () => {
       expect(profileCreateMock).toHaveBeenCalledWith(
         expect.objectContaining({ adminProfileId: '5' }),
       );
+    });
+
+    it('links the new affiliate to the super affiliate whose referral code was used, not to an admin', async () => {
+      adminProfileFindOneMock
+        .mockResolvedValueOnce(null) // not an admin code
+        .mockResolvedValueOnce({
+          id: '8',
+          user: { status: UserStatus.ACTIVE },
+        });
+      createUserMock.mockResolvedValue({ id: '1', email: 'ana@example.com' });
+      profileCreateMock.mockImplementation((entity: object) => entity);
+
+      await service.register({ ...registerDto, referral_code: 'SA-ABC123' });
+
+      expect(profileCreateMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          adminProfileId: null,
+          superAffiliateProfileId: '8',
+        }),
+      );
+    });
+
+    it('rejects an inactive super affiliate code', async () => {
+      adminProfileFindOneMock
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce({
+          id: '8',
+          user: { status: UserStatus.INACTIVE },
+        });
+
+      await expect(
+        service.register({ ...registerDto, referral_code: 'SA-ABC123' }),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(createUserMock).not.toHaveBeenCalled();
     });
 
     it('rejects an unknown admin referral code without creating the user', async () => {
@@ -391,7 +429,6 @@ describe('AffiliatesService', () => {
       };
       profileFindOneMock
         .mockResolvedValueOnce(pendingProfile) // findProfileByIdOrFail (start of approve)
-        .mockResolvedValueOnce(null) // uniqueness check inside generateUniqueReferralCode
         .mockResolvedValueOnce(approvedProfile); // findProfileByIdOrFail (return value)
       profileSaveMock.mockResolvedValue(undefined);
 
@@ -428,7 +465,6 @@ describe('AffiliatesService', () => {
       };
       profileFindOneMock
         .mockResolvedValueOnce(pendingProfile) // findProfileByIdOrFail
-        .mockResolvedValueOnce(null) // custom-code uniqueness check: free
         .mockResolvedValueOnce(approvedProfile); // findProfileByIdOrFail (return value)
       profileSaveMock.mockResolvedValue(undefined);
 
@@ -444,14 +480,47 @@ describe('AffiliatesService', () => {
         affiliateCode: null,
         user: { status: UserStatus.PENDING_APPROVAL },
       };
-      profileFindOneMock
-        .mockResolvedValueOnce(pendingProfile) // findProfileByIdOrFail
-        .mockResolvedValueOnce({ id: '2', affiliateCode: 'YAY-CUSTOM' }); // taken by someone else
+      profileFindOneMock.mockResolvedValueOnce(pendingProfile); // findProfileByIdOrFail
+      referralCodeQueryMock.mockResolvedValueOnce([
+        { table: 'affiliator_profiles', id: '2' },
+      ]); // taken by someone else
 
       await expect(
         service.approve('1', 'admin-1', 'YAY-CUSTOM'),
       ).rejects.toBeInstanceOf(ConflictException);
       expect(profileSaveMock).not.toHaveBeenCalled();
+    });
+
+    it('rejects a custom referral code already used by an admin or super affiliate', async () => {
+      profileFindOneMock.mockResolvedValueOnce({
+        id: '1',
+        userId: '1',
+        affiliateCode: null,
+        user: { status: UserStatus.PENDING_APPROVAL },
+      });
+      referralCodeQueryMock.mockResolvedValueOnce([
+        { table: 'super_affiliate_profiles', id: '1' },
+      ]);
+
+      await expect(
+        service.approve('1', 'admin-1', 'SA-TAKEN'),
+      ).rejects.toBeInstanceOf(ConflictException);
+    });
+
+    it('accepts the affiliate keeping its own code', async () => {
+      profileFindOneMock.mockResolvedValue({
+        id: '1',
+        userId: '1',
+        affiliateCode: 'MINE',
+        user: { status: UserStatus.ACTIVE },
+      });
+      referralCodeQueryMock.mockResolvedValueOnce([
+        { table: 'affiliator_profiles', id: '1' },
+      ]);
+
+      await expect(service.approve('1', 'admin-1', 'MINE')).resolves.toEqual(
+        expect.objectContaining({ affiliateCode: 'MINE' }),
+      );
     });
 
     it('throws NotFoundException for an unknown profile', async () => {
@@ -801,15 +870,16 @@ describe('AffiliatesService', () => {
 
   describe('generateUniqueReferralCode via approve', () => {
     it('retries when a generated code already exists, eventually throwing ConflictException if exhausted', async () => {
-      profileFindOneMock
-        .mockResolvedValueOnce({
-          id: '1',
-          userId: '1',
-          affiliateCode: null,
-          user: { status: UserStatus.PENDING_APPROVAL },
-        })
-        // Every uniqueness check inside generateUniqueReferralCode reports a collision.
-        .mockResolvedValue({ id: 'collides' });
+      profileFindOneMock.mockResolvedValueOnce({
+        id: '1',
+        userId: '1',
+        affiliateCode: null,
+        user: { status: UserStatus.PENDING_APPROVAL },
+      });
+      // Every uniqueness check inside generateUniqueReferralCode reports a collision.
+      referralCodeQueryMock.mockResolvedValue([
+        { table: 'admin_profiles', id: '9' },
+      ]);
 
       await expect(service.approve('1', 'admin-1')).rejects.toBeInstanceOf(
         ConflictException,

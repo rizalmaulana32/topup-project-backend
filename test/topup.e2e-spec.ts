@@ -6,10 +6,6 @@ import { App } from 'supertest/types';
 import { Repository } from 'typeorm';
 import { AppModule } from '../src/app.module';
 import {
-  Product,
-  ProductStatus,
-} from '../src/products/entities/product.entity';
-import {
   PaymentStatus,
   ProviderStatus,
   Transaction,
@@ -17,7 +13,7 @@ import {
 import { LinkQuService } from '../src/linkqu/linkqu.service';
 
 /**
- * Exercises the full customer top-up purchase flow (check-id -> checkout ->
+ * Exercises the full customer top-up purchase flow (check-id -> checkout-custom ->
  * LinkQu payment callback -> mock coin injection) against a real Postgres
  * database (via TypeOrmModule, see development/backend/docker-compose.yml).
  * LinkQuService is overridden with a deterministic double because this
@@ -45,9 +41,7 @@ class FakeLinkQuService {
 
 describe('Topup (e2e)', () => {
   let app: INestApplication<App>;
-  let productRepository: Repository<Product>;
   let transactionRepository: Repository<Transaction>;
-  let testProduct: Product;
 
   beforeAll(async () => {
     const moduleFixture: TestingModule = await Test.createTestingModule({
@@ -68,22 +62,10 @@ describe('Topup (e2e)', () => {
     );
     await app.init();
 
-    productRepository = moduleFixture.get(getRepositoryToken(Product));
     transactionRepository = moduleFixture.get(getRepositoryToken(Transaction));
 
     await transactionRepository.query(
       'TRUNCATE TABLE transactions, platform_withdrawals, platform_revenue_logs, platform_settings, products RESTART IDENTITY CASCADE',
-    );
-
-    testProduct = await productRepository.save(
-      productRepository.create({
-        name: '120 Diamonds (e2e)',
-        providerCode: 'ml_120_e2e',
-        basePrice: '15000',
-        sellingPrice: '20000',
-        coinAmount: '120',
-        status: ProductStatus.ACTIVE,
-      }),
     );
   });
 
@@ -126,125 +108,27 @@ describe('Topup (e2e)', () => {
     });
   });
 
-  it('lists active products publicly, without exposing cost price', async () => {
-    const response = await request(app.getHttpServer())
-      .get('/api/v1/topup/products')
-      .expect(200);
-
-    const body = response.body as {
-      success: boolean;
-      data: {
-        id: string;
-        name: string;
-        selling_price: string;
-        coin_amount: string;
-        bonus_coin: string;
-        flag: string | null;
-      }[];
-    };
-    expect(body.success).toBe(true);
-    const listed = body.data.find((p) => p.id === testProduct.id);
-    expect(listed).toEqual({
-      id: testProduct.id,
-      name: '120 Diamonds (e2e)',
-      selling_price: '20000.00',
-      coin_amount: '120.00',
-      bonus_coin: '0.00',
-      flag: null,
-    });
-    expect(listed).not.toHaveProperty('base_price');
-    expect(listed).not.toHaveProperty('basePrice');
-  });
-
   it('returns 404 for an unknown transaction status lookup', async () => {
     await request(app.getHttpServer())
       .get('/api/v1/topup/transactions/TRX-doesnotexist')
       .expect(404);
   });
 
-  it('rejects checkout for an unknown product', async () => {
+  it('no longer serves the removed fixed-product catalog/checkout', async () => {
     await request(app.getHttpServer())
-      .post('/api/v1/topup/checkout')
-      .send({ product_id: '999999', target_user_id: '12345678' })
+      .get('/api/v1/topup/products')
       .expect(404);
-  });
-
-  it('runs the full checkout -> LinkQu callback -> coin injection path', async () => {
-    const checkoutResponse = await request(app.getHttpServer())
-      .post('/api/v1/topup/checkout')
-      .send({
-        product_id: testProduct.id,
-        target_user_id: '12345678',
-        target_zone_id: '1234',
-      })
-      .expect(201);
-
-    const body = checkoutResponse.body as {
-      success: boolean;
-      data: {
-        transaction_id: string;
-        linkqu_reference: string;
-        invoice_url: string;
-      };
-    };
-    const { transaction_id, linkqu_reference, invoice_url } = body.data;
-    expect(transaction_id).toMatch(/^TRX-\d{8}-\d{4}$/);
-    expect(linkqu_reference).toBe(`fake-reference-${transaction_id}`);
-    expect(invoice_url).toContain(transaction_id);
-
-    const pendingTransaction = await transactionRepository.findOne({
-      where: { id: transaction_id },
-    });
-    expect(pendingTransaction?.paymentStatus).toBe(PaymentStatus.PENDING);
-
     await request(app.getHttpServer())
-      .post('/api/v1/webhooks/linkqu/payment')
-      .send({
-        partner_reff: transaction_id,
-        amount: 20000,
-        va_number: '7136490000031689',
-        username: 'LI307GXIN',
-        status: 'SUCCESS',
-        signature: TEST_SIGNATURE,
-      })
-      .expect(200)
-      .expect({ response: 'OK' });
-
-    const paidTransaction = await transactionRepository.findOne({
-      where: { id: transaction_id },
-    });
-    expect(paidTransaction?.paymentStatus).toBe(PaymentStatus.PAID);
-    expect(paidTransaction?.providerStatus).toBe(ProviderStatus.SUCCESS);
-    expect(paidTransaction?.paidAt).not.toBeNull();
-    expect(paidTransaction?.completedAt).not.toBeNull();
-
-    const statusResponse = await request(app.getHttpServer())
-      .get(`/api/v1/topup/transactions/${transaction_id}`)
-      .expect(200);
-    const statusBody = statusResponse.body as {
-      success: boolean;
-      data: {
-        transaction_id: string;
-        payment_status: string;
-        provider_status: string;
-        product_name: string;
-      };
-    };
-    expect(statusBody.data).toEqual(
-      expect.objectContaining({
-        transaction_id,
-        payment_status: PaymentStatus.PAID,
-        provider_status: ProviderStatus.SUCCESS,
-        product_name: '120 Diamonds (e2e)',
-      }),
-    );
+      .post('/api/v1/topup/checkout')
+      .send({ product_id: '1', target_user_id: '12345678' })
+      .expect(404);
   });
 
   it('marks a transaction failed on a non-success LinkQu callback status', async () => {
     const checkoutResponse = await request(app.getHttpServer())
-      .post('/api/v1/topup/checkout')
+      .post('/api/v1/topup/checkout-custom')
       .send({
-        product_id: testProduct.id,
+        amount: 20000,
         target_user_id: '11223344',
         target_zone_id: '5566',
       })
@@ -369,8 +253,8 @@ describe('Topup (e2e)', () => {
       success: true,
       data: {
         amount: 370000,
-        coin_amount: 373500,
-        bonus_coin: 3500,
+        coin_amount: 373700,
+        bonus_coin: 3700,
         extra_coin: 0,
       },
     });

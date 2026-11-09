@@ -30,6 +30,11 @@ export class ListAffiliatesDto {
   @IsString()
   admin_profile_id?: string;
 
+  /** Only affiliates under this super affiliate. */
+  @IsOptional()
+  @IsString()
+  super_affiliate_id?: string;
+
   @IsOptional()
   @IsString()
   search?: string;

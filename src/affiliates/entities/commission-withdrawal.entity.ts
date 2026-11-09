@@ -29,17 +29,10 @@ export enum WithdrawalStatus {
   FAILED = 'failed',
 }
 
-@Entity('commission_withdrawals')
-export class CommissionWithdrawal {
+/** Columns shared by affiliate and super-affiliate withdrawals (same flow, separate tables). */
+export abstract class WithdrawalBase {
   @PrimaryColumn()
   id: string;
-
-  @Column({ name: 'affiliator_id' })
-  affiliatorId: string;
-
-  @ManyToOne(() => AffiliatorProfile)
-  @JoinColumn({ name: 'affiliator_id' })
-  affiliator: AffiliatorProfile;
 
   @Column({ type: 'decimal', precision: 14, scale: 2 })
   amount: string;
@@ -113,4 +106,14 @@ export class CommissionWithdrawal {
 
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
+}
+
+@Entity('commission_withdrawals')
+export class CommissionWithdrawal extends WithdrawalBase {
+  @Column({ name: 'affiliator_id' })
+  affiliatorId: string;
+
+  @ManyToOne(() => AffiliatorProfile)
+  @JoinColumn({ name: 'affiliator_id' })
+  affiliator: AffiliatorProfile;
 }

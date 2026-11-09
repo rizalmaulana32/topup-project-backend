@@ -1,4 +1,5 @@
 import {
+  Check,
   Column,
   CreateDateColumn,
   DeleteDateColumn,
@@ -9,9 +10,15 @@ import {
   PrimaryGeneratedColumn,
 } from 'typeorm';
 import { AdminProfile } from '../../manual-topup/entities/admin-profile.entity';
+import { SuperAffiliateProfile } from '../../super-affiliates/entities/super-affiliate-profile.entity';
 import { User } from '../../users/entities/user.entity';
 
 @Entity('affiliator_profiles')
+/** One upline only: an admin or a super affiliate, never both. */
+@Check(
+  'CHK_affiliator_profiles_single_upline',
+  '"admin_profile_id" IS NULL OR "super_affiliate_profile_id" IS NULL',
+)
 export class AffiliatorProfile {
   @PrimaryGeneratedColumn('increment', { type: 'bigint' })
   id: string;
@@ -117,6 +124,18 @@ export class AffiliatorProfile {
   @ManyToOne(() => AdminProfile)
   @JoinColumn({ name: 'admin_profile_id' })
   adminProfile: AdminProfile | null;
+
+  /** The super affiliate whose referral code this affiliate registered with (or was moved to), if any. */
+  @Column({
+    name: 'super_affiliate_profile_id',
+    type: 'bigint',
+    nullable: true,
+  })
+  superAffiliateProfileId: string | null;
+
+  @ManyToOne(() => SuperAffiliateProfile)
+  @JoinColumn({ name: 'super_affiliate_profile_id' })
+  superAffiliateProfile: SuperAffiliateProfile | null;
 
   @Column({ name: 'approved_by', type: 'bigint', nullable: true })
   approvedBy: string | null;

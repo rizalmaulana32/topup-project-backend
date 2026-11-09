@@ -1,5 +1,4 @@
 import {
-  BadGatewayException,
   BadRequestException,
   ConflictException,
   ForbiddenException,
@@ -11,11 +10,13 @@ import {
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
 import * as bcrypt from 'bcrypt';
 import { DataSource, In, Repository } from 'typeorm';
+import { generateOrderId } from '../common/utils/id-generator.util';
 import {
-  generateOrderId,
-  generateReferralCode,
-} from '../common/utils/id-generator.util';
+  assertReferralCodeAvailable,
+  generateUniqueReferralCode,
+} from '../common/utils/referral-code.util';
 import { AdminProfile } from '../manual-topup/entities/admin-profile.entity';
+import { SuperAffiliateProfile } from '../super-affiliates/entities/super-affiliate-profile.entity';
 import { PROVIDER_TOP_UP_PORT } from '../provider/provider-top-up.port';
 import type { ProviderTopUpPort } from '../provider/provider-top-up.port';
 import { SettingsService } from '../settings/settings.service';
@@ -39,9 +40,18 @@ import {
   WithdrawalMethod,
   WithdrawalStatus,
 } from './entities/commission-withdrawal.entity';
+import {
+  assertMomoIdExists,
+  priceWithdrawal,
+  sendMomoCoinPayout,
+} from './withdrawal.util';
 
 const BCRYPT_SALT_ROUNDS = 10;
-const REFERRAL_CODE_MAX_ATTEMPTS = 5;
+
+/** The account a registration referral code points at - an affiliate has at most one. */
+export type Upline =
+  | { kind: 'admin'; profile: AdminProfile }
+  | { kind: 'super_affiliate'; profile: SuperAffiliateProfile };
 
 @Injectable()
 export class AffiliatesService {
@@ -68,19 +78,69 @@ export class AffiliatesService {
     return user !== null;
   }
 
+  /**
+   * Finds the active, non-deleted admin or super affiliate owning a
+   * registration referral code, or null. Codes are unique across both
+   * tables (see referral-code.util.ts), so at most one can match.
+   */
+  async findUpline(code: string): Promise<Upline | null> {
+    const admin = await this.dataSource.getRepository(AdminProfile).findOne({
+      where: { referralCode: code },
+      relations: { user: true },
+    });
+    if (admin) {
+      return admin.user.status === UserStatus.ACTIVE
+        ? { kind: 'admin', profile: admin }
+        : null;
+    }
+    const superAffiliate = await this.dataSource
+      .getRepository(SuperAffiliateProfile)
+      .findOne({ where: { referralCode: code }, relations: { user: true } });
+    return superAffiliate?.user.status === UserStatus.ACTIVE
+      ? { kind: 'super_affiliate', profile: superAffiliate }
+      : null;
+  }
+
+  private async findUplineOrFail(code: string): Promise<Upline> {
+    const upline = await this.findUpline(code);
+    if (!upline) {
+      throw new BadRequestException(`Referral code ${code} is not valid`);
+    }
+    return upline;
+  }
+
+  /** Public pre-check for the optional registration referral code. */
+  async checkRegistrationReferralCode(code: string) {
+    const upline = await this.findUpline(code);
+    return {
+      valid: upline !== null,
+      type: upline?.kind ?? null,
+      name: upline?.profile.user.name ?? null,
+    };
+  }
+
+  /**
+   * Superadmin moves an affiliate under another admin/super affiliate (by
+   * its referral code), or detaches them with null. Only future
+   * transactions are affected.
+   */
+  async moveUpline(
+    profileId: string,
+    referralCode: string | null,
+  ): Promise<AffiliatorProfile> {
+    const profile = await this.findProfileByIdOrFail(profileId);
+    const upline = referralCode
+      ? await this.findUplineOrFail(referralCode)
+      : null;
+    await this.profileRepository.update(profile.id, uplineColumns(upline));
+    return this.findProfileByIdOrFail(profileId);
+  }
+
   async register(dto: RegisterAffiliateDto) {
     // Resolved before the user row is created, so a bad code leaves nothing behind.
-    const adminProfile = dto.referral_code
-      ? await this.dataSource.getRepository(AdminProfile).findOne({
-          where: { referralCode: dto.referral_code },
-          relations: { user: true },
-        })
+    const upline = dto.referral_code
+      ? await this.findUplineOrFail(dto.referral_code)
       : null;
-    if (dto.referral_code && adminProfile?.user.status !== UserStatus.ACTIVE) {
-      throw new BadRequestException(
-        `Referral code ${dto.referral_code} is not valid`,
-      );
-    }
 
     const passwordHash = await bcrypt.hash(dto.password, BCRYPT_SALT_ROUNDS);
     const settings = await this.settingsService.get();
@@ -100,7 +160,7 @@ export class AffiliatesService {
       accountHolder: dto.account_holder,
       phoneNumber: dto.phone_number,
       commissionRate: settings.globalCommissionRate,
-      adminProfileId: adminProfile?.id ?? null,
+      ...uplineColumns(upline),
     });
     await this.profileRepository.save(profile);
 
@@ -204,6 +264,7 @@ export class AffiliatesService {
       current_period_volume: profile.currentPeriodVolume,
       current_period_month: profile.currentPeriodMonth,
       admin: toLinkedAdmin(profile.adminProfile),
+      super_affiliate: toLinkedSuperAffiliate(profile.superAffiliateProfile),
       approved_by: profile.approvedBy,
       approved_at: profile.approvedAt,
       created_at: profile.createdAt,
@@ -354,6 +415,15 @@ export class AffiliatesService {
           withDeleted: true,
         });
     }
+    if (profile?.superAffiliateProfileId) {
+      profile.superAffiliateProfile = await this.dataSource
+        .getRepository(SuperAffiliateProfile)
+        .findOne({
+          where: { id: profile.superAffiliateProfileId },
+          relations: { user: true },
+          withDeleted: true,
+        });
+    }
     if (!profile) {
       throw new NotFoundException(`Affiliate profile ${profileId} not found`);
     }
@@ -368,17 +438,16 @@ export class AffiliatesService {
     const profile = await this.findProfileByIdOrFail(profileId);
 
     if (customReferralCode) {
-      const existing = await this.profileRepository.findOne({
-        where: { affiliateCode: customReferralCode },
-      });
-      if (existing && existing.id !== profile.id) {
-        throw new ConflictException(
-          `Referral code ${customReferralCode} is already in use`,
-        );
-      }
-      profile.affiliateCode = customReferralCode;
+      profile.affiliateCode = await assertReferralCodeAvailable(
+        this.dataSource,
+        customReferralCode,
+        { table: 'affiliator_profiles', id: profile.id },
+      );
     } else if (!profile.affiliateCode) {
-      profile.affiliateCode = await this.generateUniqueReferralCode();
+      profile.affiliateCode = await generateUniqueReferralCode(
+        this.dataSource,
+        'AFF',
+      );
     }
     profile.approvedBy = adminUserId;
     profile.approvedAt = new Date();
@@ -400,14 +469,11 @@ export class AffiliatesService {
   ): Promise<AffiliatorProfile> {
     const profile = await this.findProfileByIdOrFail(profileId);
 
-    const existing = await this.profileRepository.findOne({
-      where: { affiliateCode: newCode },
-    });
-    if (existing && existing.id !== profile.id) {
-      throw new ConflictException(`Referral code ${newCode} is already in use`);
-    }
-
-    profile.affiliateCode = newCode;
+    profile.affiliateCode = await assertReferralCodeAvailable(
+      this.dataSource,
+      newCode,
+      { table: 'affiliator_profiles', id: profile.id },
+    );
     await this.profileRepository.save(profile);
     return profile;
   }
@@ -607,21 +673,6 @@ export class AffiliatesService {
     return this.profileRepository.save(profile);
   }
 
-  private async generateUniqueReferralCode(): Promise<string> {
-    for (let attempt = 0; attempt < REFERRAL_CODE_MAX_ATTEMPTS; attempt += 1) {
-      const candidate = generateReferralCode();
-      const existing = await this.profileRepository.findOne({
-        where: { affiliateCode: candidate },
-      });
-      if (!existing) {
-        return candidate;
-      }
-    }
-    throw new ConflictException(
-      'Could not generate a unique referral code, please retry',
-    );
-  }
-
   /**
    * Credits commission for a referred, successfully fulfilled transaction.
    * Uses a pessimistic row lock on the affiliate profile (per the source
@@ -746,14 +797,7 @@ export class AffiliatesService {
   ): Promise<CommissionWithdrawal> {
     const isCoin = payout.method === WithdrawalMethod.MOMO_COIN;
     if (isCoin) {
-      // Catch a mistyped Momo ID now, not after an admin approves and the send fails.
-      try {
-        await this.provider.checkId('', payout.momoUserId ?? '');
-      } catch {
-        throw new BadRequestException(
-          `Momo ID ${payout.momoUserId} was not found.`,
-        );
-      }
+      await assertMomoIdExists(this.provider, payout.momoUserId);
     }
 
     const settings = await this.settingsService.get();
@@ -781,34 +825,14 @@ export class AffiliatesService {
       }
 
       const balance = Number(profile.commissionBalance);
-      const minimumWithdrawal = Number(settings.minimumWithdrawalAmount);
-
-      if (balance < minimumWithdrawal) {
-        throw new BadRequestException(
-          `Commission balance (${balance}) has not reached the minimum withdrawal amount (${minimumWithdrawal}).`,
-        );
-      }
-      if (amount <= 0) {
-        throw new BadRequestException('Withdrawal amount must be positive.');
-      }
-      if (amount > balance) {
-        throw new BadRequestException(
-          `Requested amount (${amount}) exceeds available commission balance (${balance}).`,
-        );
-      }
-
       const adminFee = Number(settings.withdrawalAdminFee);
-      const netAmount = amount - adminFee;
-      if (netAmount <= 0) {
-        throw new BadRequestException(
-          `Requested amount (${amount}) does not cover the withdrawal admin fee (${adminFee}).`,
-        );
-      }
-      if (isCoin && !Number.isInteger(netAmount)) {
-        throw new BadRequestException(
-          `Net amount (${netAmount}) must be a whole number to pay out as Momo coins.`,
-        );
-      }
+      const netAmount = priceWithdrawal({
+        balance,
+        amount,
+        minimumWithdrawal: Number(settings.minimumWithdrawalAmount),
+        adminFee,
+        isCoin,
+      });
 
       const newBalance = balance - amount;
       await queryRunner.manager.update(AffiliatorProfile, profile.id, {
@@ -943,60 +967,16 @@ export class AffiliatesService {
     adminUserId: string,
     notes?: string,
   ): Promise<CommissionWithdrawal> {
-    const claimed = await this.withdrawalRepository.update(
-      { id: withdrawal.id, status: WithdrawalStatus.APPROVED },
-      {
-        status: WithdrawalStatus.PAID,
-        processedBy: adminUserId,
-        processedAt: new Date(),
-      },
+    await sendMomoCoinPayout(
+      this.withdrawalRepository,
+      this.provider,
+      this.logger,
+      withdrawal,
+      adminUserId,
+      notes,
+      'AFFILIATE_WITHDRAWAL',
     );
-    if (!claimed.affected) {
-      throw new ConflictException(
-        `Withdrawal ${withdrawal.id} is not approved (current status: ${withdrawal.status})`,
-      );
-    }
-
-    const result = await this.provider
-      .injectCoin({
-        productProviderCode: 'AFFILIATE_WITHDRAWAL',
-        targetUserId: withdrawal.momoUserId ?? '',
-        coin: Number(withdrawal.netAmount),
-      })
-      .catch((error: unknown) => ({
-        success: false,
-        rejected: false,
-        response: error instanceof Error ? error.message : String(error),
-      }));
-    const prefix = notes ? `${notes} | ` : '';
-
-    if (result.success) {
-      await this.withdrawalRepository.update(withdrawal.id, {
-        adminNotes: `${prefix}Momo coin send: ${result.response}`,
-      });
-      return this.findWithdrawalByIdOrFail(withdrawal.id);
-    }
-
-    if (result.rejected) {
-      await this.withdrawalRepository.update(withdrawal.id, {
-        status: WithdrawalStatus.APPROVED,
-        processedBy: null,
-        processedAt: null,
-      });
-      throw new BadGatewayException(
-        `MomoLive refused the coin send for withdrawal ${withdrawal.id} (nothing sent, still approved - retry): ${result.response}`,
-      );
-    }
-
-    await this.withdrawalRepository.update(withdrawal.id, {
-      adminNotes: `${prefix}UNVERIFIED Momo coin send - check MomoLive before sending again: ${result.response}`,
-    });
-    this.logger.error(
-      `Momo coin send for withdrawal ${withdrawal.id} has an unknown outcome: ${result.response}`,
-    );
-    throw new BadGatewayException(
-      `Momo coin send for withdrawal ${withdrawal.id} has an unknown outcome: ${result.response}. Marked paid to prevent a duplicate send - check in MomoLive whether the coins arrived.`,
-    );
+    return this.findWithdrawalByIdOrFail(withdrawal.id);
   }
 
   /**
@@ -1184,6 +1164,7 @@ export class AffiliatesService {
   async findAllProfiles(params: {
     status?: UserStatus;
     adminProfileId?: string;
+    superAffiliateProfileId?: string;
     search?: string;
     limit: number;
     offset: number;
@@ -1193,6 +1174,8 @@ export class AffiliatesService {
       .leftJoinAndSelect('profile.user', 'user')
       .leftJoinAndSelect('profile.adminProfile', 'adminProfile')
       .leftJoinAndSelect('adminProfile.user', 'adminUser')
+      .leftJoinAndSelect('profile.superAffiliateProfile', 'superAffiliate')
+      .leftJoinAndSelect('superAffiliate.user', 'superAffiliateUser')
       .withDeleted()
       .andWhere('profile.deletedAt IS NULL')
       .orderBy('profile.createdAt', 'DESC')
@@ -1206,6 +1189,12 @@ export class AffiliatesService {
     if (params.adminProfileId) {
       qb.andWhere('profile.adminProfileId = :adminProfileId', {
         adminProfileId: params.adminProfileId,
+      });
+    }
+
+    if (params.superAffiliateProfileId) {
+      qb.andWhere('profile.superAffiliateProfileId = :superAffiliateId', {
+        superAffiliateId: params.superAffiliateProfileId,
       });
     }
 
@@ -1373,5 +1362,27 @@ export function toLinkedAdmin(admin: AdminProfile | null | undefined) {
     name: admin.user?.name ?? null,
     referral_code: admin.referralCode,
     deleted: admin.deletedAt !== null,
+  };
+}
+
+/** The super affiliate an affiliate sits under, or null. */
+export function toLinkedSuperAffiliate(
+  superAffiliate: SuperAffiliateProfile | null | undefined,
+) {
+  if (!superAffiliate) return null;
+  return {
+    super_affiliate_id: superAffiliate.id,
+    name: superAffiliate.user?.name ?? null,
+    referral_code: superAffiliate.referralCode,
+    deleted: superAffiliate.deletedAt !== null,
+  };
+}
+
+/** Exactly one upline column set (see CHK_affiliator_profiles_single_upline). */
+function uplineColumns(upline: Upline | null) {
+  return {
+    adminProfileId: upline?.kind === 'admin' ? upline.profile.id : null,
+    superAffiliateProfileId:
+      upline?.kind === 'super_affiliate' ? upline.profile.id : null,
   };
 }

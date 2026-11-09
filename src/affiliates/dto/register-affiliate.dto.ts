@@ -29,7 +29,7 @@ export class RegisterAffiliateDto {
   @MinLength(1)
   phone_number: string;
 
-  /** Optional admin referral code (from GET /admin/manual-admins) - links the new affiliate to that admin. */
+  /** Optional referral code of an admin or super affiliate - links the new affiliate to that one upline. Check it first with GET /affiliate/check-referral-code. */
   @IsOptional()
   @Transform(({ value }: { value: unknown }) =>
     typeof value === 'string' ? value.trim().toUpperCase() || undefined : value,

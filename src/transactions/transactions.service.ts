@@ -2,24 +2,17 @@ import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, IsNull, Not, Repository } from 'typeorm';
 import { generateOrderId } from '../common/utils/id-generator.util';
-import { Product } from '../products/entities/product.entity';
 import {
   PaymentStatus,
   ProviderStatus,
   Transaction,
 } from './entities/transaction.entity';
 
-interface CreatePendingTransactionParams {
-  product: Product;
-  targetUserId: string;
-  targetZoneId?: string | null;
-  referralCode?: string | null;
-}
-
 interface CreatePendingCustomAmountTransactionParams {
   grossAmount: string;
   coinAmount: string;
   costBasis: string;
+  bonusCoin: string;
   targetUserId: string;
   targetZoneId?: string | null;
   referralCode?: string | null;
@@ -31,23 +24,6 @@ export class TransactionsService {
     @InjectRepository(Transaction)
     private readonly transactionRepository: Repository<Transaction>,
   ) {}
-
-  async createPending(
-    params: CreatePendingTransactionParams,
-  ): Promise<Transaction> {
-    const transaction = this.transactionRepository.create({
-      id: generateOrderId('TRX'),
-      productId: params.product.id,
-      targetUserId: params.targetUserId,
-      targetZoneId: params.targetZoneId ?? null,
-      referralCode: params.referralCode ?? null,
-      grossAmount: params.product.sellingPrice,
-      paymentStatus: PaymentStatus.PENDING,
-      providerStatus: ProviderStatus.PENDING,
-    });
-
-    return this.transactionRepository.save(transaction);
-  }
 
   async createPendingCustomAmount(
     params: CreatePendingCustomAmountTransactionParams,
@@ -61,6 +37,7 @@ export class TransactionsService {
       grossAmount: params.grossAmount,
       coinAmount: params.coinAmount,
       costBasis: params.costBasis,
+      bonusCoin: params.bonusCoin,
       paymentStatus: PaymentStatus.PENDING,
       providerStatus: ProviderStatus.PENDING,
     });
@@ -107,7 +84,6 @@ export class TransactionsService {
     status?: PaymentStatus;
     dateFrom?: string;
     dateTo?: string;
-    productId?: string;
     referralCode?: string;
     amountMin?: number;
     amountMax?: number;
@@ -134,13 +110,8 @@ export class TransactionsService {
     }
     if (params.dateTo) {
       // Inclusive of the whole end day - date_to is a calendar date, not a timestamp.
-      query.andWhere('t.created_at < (:dateTo::date + interval \'1 day\')', {
+      query.andWhere("t.created_at < (:dateTo::date + interval '1 day')", {
         dateTo: params.dateTo,
-      });
-    }
-    if (params.productId) {
-      query.andWhere('t.product_id = :productId', {
-        productId: params.productId,
       });
     }
     if (params.referralCode) {
@@ -221,7 +192,10 @@ export class TransactionsService {
     });
   }
 
-  async setProviderFee(transactionId: string, providerFee: string): Promise<void> {
+  async setProviderFee(
+    transactionId: string,
+    providerFee: string,
+  ): Promise<void> {
     await this.transactionRepository.update(transactionId, { providerFee });
   }
 
@@ -243,14 +217,14 @@ export class TransactionsService {
     const result:
       | { gross_total: string | null; total_with_fee: string | null }
       | undefined = await this.transactionRepository
-        .createQueryBuilder('t')
-        .select('COALESCE(SUM(t.gross_amount), 0)', 'gross_total')
-        .addSelect(
-          'COALESCE(SUM(t.gross_amount + COALESCE(t.provider_fee, 0)), 0)',
-          'total_with_fee',
-        )
-        .where('t.payment_status = :status', { status: PaymentStatus.PAID })
-        .getRawOne();
+      .createQueryBuilder('t')
+      .select('COALESCE(SUM(t.gross_amount), 0)', 'gross_total')
+      .addSelect(
+        'COALESCE(SUM(t.gross_amount + COALESCE(t.provider_fee, 0)), 0)',
+        'total_with_fee',
+      )
+      .where('t.payment_status = :status', { status: PaymentStatus.PAID })
+      .getRawOne();
 
     return {
       grossTotal: result?.gross_total ?? '0',

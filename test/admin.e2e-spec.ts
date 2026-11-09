@@ -8,7 +8,6 @@ import { Repository } from 'typeorm';
 import { AppModule } from '../src/app.module';
 import { AffiliatorProfile } from '../src/affiliates/entities/affiliator-profile.entity';
 import { LinkQuService } from '../src/linkqu/linkqu.service';
-import { Product } from '../src/products/entities/product.entity';
 import {
   PaymentStatus,
   ProviderStatus,
@@ -41,7 +40,6 @@ describe('Admin (e2e)', () => {
   let app: INestApplication<App>;
   let userRepository: Repository<User>;
   let profileRepository: Repository<AffiliatorProfile>;
-  let productRepository: Repository<Product>;
   let transactionRepository: Repository<Transaction>;
 
   let superadminToken: string;
@@ -100,10 +98,7 @@ describe('Admin (e2e)', () => {
     profileRepository = moduleFixture.get(
       getRepositoryToken(AffiliatorProfile),
     );
-    productRepository = moduleFixture.get(getRepositoryToken(Product));
-    transactionRepository = moduleFixture.get(
-      getRepositoryToken(Transaction),
-    );
+    transactionRepository = moduleFixture.get(getRepositoryToken(Transaction));
 
     await userRepository.query(
       'TRUNCATE TABLE commission_withdrawals, commission_logs, transactions, affiliator_profiles, platform_withdrawals, platform_revenue_logs, platform_settings, users, products RESTART IDENTITY CASCADE',
@@ -246,7 +241,9 @@ describe('Admin (e2e)', () => {
   });
 
   it('approves an affiliate with a custom referral code instead of auto-generating one', async () => {
-    const profileId = await registerPendingAffiliate('custom-code.e2e@example.com');
+    const profileId = await registerPendingAffiliate(
+      'custom-code.e2e@example.com',
+    );
 
     const response = await request(app.getHttpServer())
       .post(`/api/v1/admin/affiliates/${profileId}/approve`)
@@ -259,7 +256,9 @@ describe('Admin (e2e)', () => {
   });
 
   it('rejects approving with a referral code already used by another affiliate', async () => {
-    const profileId = await registerPendingAffiliate('custom-code-2.e2e@example.com');
+    const profileId = await registerPendingAffiliate(
+      'custom-code-2.e2e@example.com',
+    );
 
     await request(app.getHttpServer())
       .post(`/api/v1/admin/affiliates/${profileId}/approve`)
@@ -269,7 +268,9 @@ describe('Admin (e2e)', () => {
   });
 
   it("edits an already-approved affiliate's referral code without touching approved_at", async () => {
-    const profileId = await registerPendingAffiliate('edit-code.e2e@example.com');
+    const profileId = await registerPendingAffiliate(
+      'edit-code.e2e@example.com',
+    );
     await request(app.getHttpServer())
       .post(`/api/v1/admin/affiliates/${profileId}/approve`)
       .set('Authorization', `Bearer ${superadminToken}`)
@@ -296,7 +297,9 @@ describe('Admin (e2e)', () => {
   });
 
   it('rejects editing a referral code to one already used by another affiliate', async () => {
-    const profileId = await registerPendingAffiliate('edit-code-2.e2e@example.com');
+    const profileId = await registerPendingAffiliate(
+      'edit-code-2.e2e@example.com',
+    );
     await request(app.getHttpServer())
       .post(`/api/v1/admin/affiliates/${profileId}/approve`)
       .set('Authorization', `Bearer ${superadminToken}`)
@@ -524,98 +527,61 @@ describe('Admin (e2e)', () => {
     ).toBe(false);
   });
 
-  it('creates and updates a product', async () => {
+  it('manages bonus tiers and rejects overlapping ranges', async () => {
+    const auth = { Authorization: `Bearer ${superadminToken}` };
+    // Seeded by the migration: [350000, 1000000) 1%, [1000000, -) 2%.
     const createResponse = await request(app.getHttpServer())
-      .post('/api/v1/admin/products')
-      .set('Authorization', `Bearer ${superadminToken}`)
-      .send({
-        name: '250 Diamonds',
-        provider_code: 'ml_250',
-        base_price: 30000,
-        selling_price: 40000,
-        coin_amount: 250,
-        bonus_coin: 10,
-        flag: 'Terlaris',
-      })
+      .post('/api/v1/admin/bonus-tiers')
+      .set(auth)
+      .send({ min_amount: 100000, max_amount: 350000, bonus_percent: 0.5 })
       .expect(201);
+    const created = (
+      createResponse.body as { data: { id: number; is_active: boolean } }
+    ).data;
+    expect(created).toEqual({
+      id: expect.any(Number),
+      min_amount: 100000,
+      max_amount: 350000,
+      bonus_percent: 0.5,
+      is_active: true,
+    });
 
-    const createBody = createResponse.body as {
-      data: { id: string; coinAmount: string; bonusCoin: string; flag: string };
-    };
-    expect(createBody.data.id).toBeDefined();
-    expect(createBody.data.coinAmount).toBe('250.00');
-    expect(createBody.data.bonusCoin).toBe('10.00');
-    expect(createBody.data.flag).toBe('Terlaris');
-
-    const updateResponse = await request(app.getHttpServer())
-      .patch(`/api/v1/admin/products/${createBody.data.id}`)
-      .set('Authorization', `Bearer ${superadminToken}`)
-      .send({ selling_price: 45000 })
-      .expect(200);
-
-    const updateBody = updateResponse.body as {
-      data: { sellingPrice: string };
-    };
-    expect(updateBody.data.sellingPrice).toBe('45000.00');
-
-    const listResponse = await request(app.getHttpServer())
-      .get('/api/v1/admin/products')
-      .set('Authorization', `Bearer ${superadminToken}`)
-      .expect(200);
-    const listBody = listResponse.body as { data: { id: string }[] };
-    expect(listBody.data.some((p) => p.id === createBody.data.id)).toBe(true);
-
-    await productRepository.delete(createBody.data.id);
-  });
-
-  it('soft-deletes a product, hiding it from listings without removing the row', async () => {
-    const createResponse = await request(app.getHttpServer())
-      .post('/api/v1/admin/products')
-      .set('Authorization', `Bearer ${superadminToken}`)
-      .send({
-        name: 'To Be Deleted',
-        provider_code: 'ml_delete_me',
-        base_price: 1000,
-        selling_price: 1500,
-        coin_amount: 100,
-      })
-      .expect(201);
-    const createBody = createResponse.body as { data: { id: string } };
-    const productId = createBody.data.id;
+    const overlap = await request(app.getHttpServer())
+      .post('/api/v1/admin/bonus-tiers')
+      .set(auth)
+      .send({ min_amount: 300000, max_amount: 400000, bonus_percent: 1 })
+      .expect(400);
+    expect((overlap.body as { message: string }).message).toBe(
+      'Rentang bentrok dengan rentang 100.000 – 350.000.',
+    );
 
     await request(app.getHttpServer())
-      .delete(`/api/v1/admin/products/${productId}`)
-      .set('Authorization', `Bearer ${superadminToken}`)
+      .patch(`/api/v1/admin/bonus-tiers/${created.id}`)
+      .set(auth)
+      .send({ is_active: false })
+      .expect(200);
+    const estimate = await request(app.getHttpServer())
+      .get('/api/v1/topup/estimate')
+      .query({ amount: 200000 })
+      .expect(200);
+    expect(
+      (estimate.body as { data: { bonus_coin: number } }).data.bonus_coin,
+    ).toBe(0);
+
+    await request(app.getHttpServer())
+      .delete(`/api/v1/admin/bonus-tiers/${created.id}`)
+      .set(auth)
       .expect(200)
       .expect({ success: true });
-
-    const adminListResponse = await request(app.getHttpServer())
-      .get('/api/v1/admin/products')
-      .set('Authorization', `Bearer ${superadminToken}`)
-      .expect(200);
-    const adminListBody = adminListResponse.body as { data: { id: string }[] };
-    expect(adminListBody.data.some((p) => p.id === productId)).toBe(false);
-
-    const publicListResponse = await request(app.getHttpServer())
-      .get('/api/v1/topup/products')
-      .expect(200);
-    const publicListBody = publicListResponse.body as {
-      data: { id: string }[];
-    };
-    expect(publicListBody.data.some((p) => p.id === productId)).toBe(false);
-
-    const rawRow = await productRepository
-      .createQueryBuilder('product')
-      .withDeleted()
-      .where('product.id = :id', { id: productId })
-      .getOne();
-    expect(rawRow).not.toBeNull();
-    expect(rawRow?.deletedAt).not.toBeNull();
+    await request(app.getHttpServer())
+      .delete(`/api/v1/admin/bonus-tiers/${created.id}`)
+      .set(auth)
+      .expect(404);
   });
 
-  it('returns 404 when soft-deleting an unknown product', async () => {
+  it('no longer serves the removed product CRUD', async () => {
     await request(app.getHttpServer())
-      .delete('/api/v1/admin/products/999999')
+      .get('/api/v1/admin/products')
       .set('Authorization', `Bearer ${superadminToken}`)
       .expect(404);
   });

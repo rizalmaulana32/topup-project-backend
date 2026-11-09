@@ -15,6 +15,8 @@ export enum UserRole {
    */
   ADMIN = 'admin',
   AFFILIATOR = 'affiliator',
+  /** Sits above affiliates and earns platform-paid commission on their sales; created by superadmin only. */
+  SUPER_AFFILIATE = 'super_affiliate',
   CUSTOMER = 'customer',
 }
 
