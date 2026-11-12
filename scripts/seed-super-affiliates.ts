@@ -12,6 +12,7 @@
  * the dev platform balance). All passwords: password123.
  */
 import { NestFactory } from '@nestjs/core';
+import * as dotenv from 'dotenv';
 import { DataSource } from 'typeorm';
 import { AppModule } from '../src/app.module';
 import { AffiliatesService } from '../src/affiliates/affiliates.service';
@@ -163,7 +164,25 @@ async function transactionId(db: DataSource, paidAt: Date): Promise<string> {
   }
 }
 
+/**
+ * Seed accounts share a known password and carry withdrawable balances, so
+ * never let this touch production: refuse unless the env is clearly dev
+ * (production runs NODE_ENV=production with the real momo coin provider).
+ */
+function assertDevEnvironment() {
+  dotenv.config();
+  const nodeEnv = process.env.NODE_ENV ?? '';
+  const vendor = process.env.PROVIDER_TOP_UP_VENDOR ?? 'mock';
+  if (nodeEnv === 'production' || vendor !== 'mock') {
+    throw new Error(
+      `Refusing to seed: NODE_ENV=${nodeEnv || '(unset)'}, PROVIDER_TOP_UP_VENDOR=${vendor}. ` +
+        'This script is for local development only (needs NODE_ENV != production and the mock provider).',
+    );
+  }
+}
+
 async function main() {
+  assertDevEnvironment();
   const app = await NestFactory.createApplicationContext(AppModule, {
     logger: ['error'],
   });
