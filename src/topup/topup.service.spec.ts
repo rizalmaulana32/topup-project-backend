@@ -238,12 +238,39 @@ describe('TopupService', () => {
     it('reports the extra-coin toggle from settings, its rate and the minimum amount', async () => {
       settingsService.get.mockResolvedValue({
         customAmountExtraCoinEnabled: true,
+        manualQrisEnabled: false,
+        manualQrisMimeType: null,
       } as any);
 
       await expect(service.getPublicConfig()).resolves.toEqual({
         extra_coin_enabled: true,
         extra_coin_percent: 0.7,
         min_custom_amount: 10000,
+        manual_qris_enabled: false,
+        manual_qris_url: null,
+      });
+    });
+
+    it('exposes the manual QRIS only when enabled AND uploaded', async () => {
+      const updatedAt = new Date(1700000000000);
+      settingsService.get.mockResolvedValue({
+        manualQrisEnabled: true,
+        manualQrisMimeType: 'image/png',
+        updatedAt,
+      } as any);
+      await expect(service.getPublicConfig()).resolves.toMatchObject({
+        manual_qris_enabled: true,
+        manual_qris_url: '/api/v1/topup/manual-qris?v=1700000000000',
+      });
+
+      settingsService.get.mockResolvedValue({
+        manualQrisEnabled: true,
+        manualQrisMimeType: null,
+        updatedAt,
+      } as any);
+      await expect(service.getPublicConfig()).resolves.toMatchObject({
+        manual_qris_enabled: false,
+        manual_qris_url: null,
       });
     });
   });

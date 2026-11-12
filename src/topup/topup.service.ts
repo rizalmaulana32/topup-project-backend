@@ -11,6 +11,7 @@ import { AffiliatesService } from '../affiliates/affiliates.service';
 import { BonusTiersService } from '../bonus-tiers/bonus-tiers.service';
 import { PlatformService } from '../platform/platform.service';
 import { SettingsService } from '../settings/settings.service';
+import type { PlatformSettings } from '../settings/entities/platform-settings.entity';
 import { SuperAffiliatesService } from '../super-affiliates/super-affiliates.service';
 import { TransactionsService } from '../transactions/transactions.service';
 import { LinkQuService } from '../linkqu/linkqu.service';
@@ -111,7 +112,25 @@ export class TopupService {
       extra_coin_enabled: settings.customAmountExtraCoinEnabled,
       extra_coin_percent: CUSTOM_AMOUNT_EXTRA_COIN_PER_MILLE / 10,
       min_custom_amount: MIN_CUSTOM_AMOUNT_RUPIAH,
+      manual_qris_enabled: this.isManualQrisShown(settings),
+      // ?v= busts browser caches when the image is replaced.
+      manual_qris_url: this.isManualQrisShown(settings)
+        ? `/api/v1/topup/manual-qris?v=${settings.updatedAt.getTime()}`
+        : null,
     };
+  }
+
+  private isManualQrisShown(settings: PlatformSettings): boolean {
+    return settings.manualQrisEnabled && settings.manualQrisMimeType !== null;
+  }
+
+  /** The manual QRIS image, or null when hidden or not uploaded. */
+  async getPublicManualQris() {
+    const settings = await this.settingsService.get();
+    if (!this.isManualQrisShown(settings)) {
+      return null;
+    }
+    return this.settingsService.getManualQris();
   }
 
   /**

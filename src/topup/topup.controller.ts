@@ -1,4 +1,14 @@
-import { Body, Controller, Get, Param, Post, Query } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  Header,
+  NotFoundException,
+  Param,
+  Post,
+  Query,
+  StreamableFile,
+} from '@nestjs/common';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import { CheckIdDto } from './dto/check-id.dto';
 import { CheckoutCustomAmountDto } from './dto/checkout-custom-amount.dto';
@@ -35,6 +45,20 @@ export class TopupController {
   async getConfig() {
     const data = await this.topupService.getPublicConfig();
     return { success: true, data };
+  }
+
+  @Get('manual-qris')
+  @ApiOperation({
+    summary:
+      'Public manual QRIS image (no auth). 404 when hidden (manual_qris_enabled off) or not uploaded - use manual_qris_url from /topup/config.',
+  })
+  @Header('X-Content-Type-Options', 'nosniff')
+  async getManualQris(): Promise<StreamableFile> {
+    const qris = await this.topupService.getPublicManualQris();
+    if (!qris) {
+      throw new NotFoundException('Manual QRIS is not available');
+    }
+    return new StreamableFile(qris.image, { type: qris.mimeType });
   }
 
   @Get('estimate')

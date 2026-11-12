@@ -144,6 +144,27 @@ export class PlatformSettings {
   @Column({ name: 'admin_account_holder', type: 'varchar', nullable: true })
   adminAccountHolder: string | null;
 
+  /**
+   * Static QRIS image shown on the top-up page as a manual payment option.
+   * select: false so the blob isn't loaded on every settings read; fetch it
+   * via SettingsService.getManualQris. mimeType is non-null iff an image is
+   * uploaded (derived from magic bytes, never the client's header).
+   */
+  @Column({
+    name: 'manual_qris_image',
+    type: 'bytea',
+    nullable: true,
+    select: false,
+  })
+  manualQrisImage: Buffer | null;
+
+  @Column({ name: 'manual_qris_mime_type', type: 'varchar', nullable: true })
+  manualQrisMimeType: string | null;
+
+  /** Whether the manual QRIS is shown publicly (GET /topup/config, /topup/manual-qris). */
+  @Column({ name: 'manual_qris_enabled', type: 'boolean', default: false })
+  manualQrisEnabled: boolean;
+
   @UpdateDateColumn({ name: 'updated_at' })
   updatedAt: Date;
 }

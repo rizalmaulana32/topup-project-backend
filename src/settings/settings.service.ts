@@ -1,9 +1,26 @@
-import { Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { PlatformSettings } from './entities/platform-settings.entity';
 
 const SETTINGS_ROW_ID = 1;
+
+/** Image type from magic bytes; null if not png/jpeg/webp. */
+export function detectImageMimeType(buf: Buffer): string | null {
+  if (buf.subarray(0, 8).equals(Buffer.from('89504e470d0a1a0a', 'hex'))) {
+    return 'image/png';
+  }
+  if (buf.subarray(0, 3).equals(Buffer.from('ffd8ff', 'hex'))) {
+    return 'image/jpeg';
+  }
+  if (
+    buf.subarray(0, 4).toString('latin1') === 'RIFF' &&
+    buf.subarray(8, 12).toString('latin1') === 'WEBP'
+  ) {
+    return 'image/webp';
+  }
+  return null;
+}
 
 @Injectable()
 export class SettingsService {
@@ -35,6 +52,7 @@ export class SettingsService {
     adminBankName?: string;
     adminAccountNumber?: string;
     adminAccountHolder?: string;
+    manualQrisEnabled?: boolean;
   }): Promise<PlatformSettings> {
     const current = await this.get();
 
@@ -46,8 +64,7 @@ export class SettingsService {
         params.minimumWithdrawalAmount.toFixed(2);
     }
     if (params.customAmountMarginRate !== undefined) {
-      current.customAmountMarginRate =
-        params.customAmountMarginRate.toFixed(2);
+      current.customAmountMarginRate = params.customAmountMarginRate.toFixed(2);
     }
     if (params.customAmountExtraCoinEnabled !== undefined) {
       current.customAmountExtraCoinEnabled =
@@ -72,7 +89,46 @@ export class SettingsService {
     if (params.adminAccountHolder !== undefined) {
       current.adminAccountHolder = params.adminAccountHolder;
     }
+    if (params.manualQrisEnabled !== undefined) {
+      current.manualQrisEnabled = params.manualQrisEnabled;
+    }
 
     return this.settingsRepository.save(current);
+  }
+
+  async setManualQris(image: Buffer): Promise<PlatformSettings> {
+    const mimeType = detectImageMimeType(image);
+    if (!mimeType) {
+      throw new BadRequestException('QRIS image must be PNG, JPEG or WebP');
+    }
+    await this.get();
+    await this.settingsRepository.update(SETTINGS_ROW_ID, {
+      manualQrisImage: image,
+      manualQrisMimeType: mimeType,
+    });
+    return this.get();
+  }
+
+  async clearManualQris(): Promise<PlatformSettings> {
+    await this.get();
+    await this.settingsRepository.update(SETTINGS_ROW_ID, {
+      manualQrisImage: null,
+      manualQrisMimeType: null,
+      manualQrisEnabled: false,
+    });
+    return this.get();
+  }
+
+  /** The uploaded image, or null if none (ignores the enabled toggle). */
+  async getManualQris(): Promise<{ image: Buffer; mimeType: string } | null> {
+    const row = await this.settingsRepository
+      .createQueryBuilder('s')
+      .addSelect('s.manualQrisImage')
+      .where('s.id = :id', { id: SETTINGS_ROW_ID })
+      .getOne();
+    if (!row?.manualQrisImage || !row.manualQrisMimeType) {
+      return null;
+    }
+    return { image: row.manualQrisImage, mimeType: row.manualQrisMimeType };
   }
 }

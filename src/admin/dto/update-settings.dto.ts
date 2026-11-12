@@ -56,4 +56,8 @@ export class UpdateSettingsDto {
   @IsString()
   @IsNotEmpty()
   admin_account_holder?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  manual_qris_enabled?: boolean;
 }

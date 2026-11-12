@@ -1,6 +1,6 @@
 import { Repository } from 'typeorm';
 import { PlatformSettings } from './entities/platform-settings.entity';
-import { SettingsService } from './settings.service';
+import { detectImageMimeType, SettingsService } from './settings.service';
 
 describe('SettingsService', () => {
   let findOneMock: jest.Mock;
@@ -93,5 +93,23 @@ describe('SettingsService', () => {
       expect(result.adminAccountNumber).toBe('9999999999');
       expect(result.adminAccountHolder).toBe('Platform Admin');
     });
+  });
+});
+
+describe('detectImageMimeType', () => {
+  it('detects png/jpeg/webp by magic bytes and rejects anything else', () => {
+    expect(
+      detectImageMimeType(Buffer.from('89504e470d0a1a0a0000', 'hex')),
+    ).toBe('image/png');
+    expect(detectImageMimeType(Buffer.from('ffd8ffe000', 'hex'))).toBe(
+      'image/jpeg',
+    );
+    expect(detectImageMimeType(Buffer.from('RIFF\0\0\0\0WEBPVP8 '))).toBe(
+      'image/webp',
+    );
+    expect(
+      detectImageMimeType(Buffer.from('<svg onload=alert(1)>')),
+    ).toBeNull();
+    expect(detectImageMimeType(Buffer.alloc(0))).toBeNull();
   });
 });

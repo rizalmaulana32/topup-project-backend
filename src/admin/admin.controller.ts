@@ -5,19 +5,26 @@ import {
   Delete,
   ForbiddenException,
   Get,
+  Header,
   Inject,
   Logger,
+  NotFoundException,
   Param,
   Patch,
   Post,
   Query,
   Req,
   StreamableFile,
+  UploadedFile,
   UseGuards,
+  UseInterceptors,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import { ConfigService } from '@nestjs/config';
 import {
   ApiBearerAuth,
+  ApiBody,
+  ApiConsumes,
   ApiOperation,
   ApiParam,
   ApiTags,
@@ -407,6 +414,8 @@ export class AdminController {
         admin_bank_name: settings.adminBankName,
         admin_account_number: settings.adminAccountNumber,
         admin_account_holder: settings.adminAccountHolder,
+        manual_qris_enabled: settings.manualQrisEnabled,
+        has_manual_qris: settings.manualQrisMimeType !== null,
       },
     };
   }
@@ -428,6 +437,7 @@ export class AdminController {
       adminBankName: dto.admin_bank_name,
       adminAccountNumber: dto.admin_account_number,
       adminAccountHolder: dto.admin_account_holder,
+      manualQrisEnabled: dto.manual_qris_enabled,
     });
     return {
       success: true,
@@ -442,6 +452,68 @@ export class AdminController {
         admin_bank_name: settings.adminBankName,
         admin_account_number: settings.adminAccountNumber,
         admin_account_holder: settings.adminAccountHolder,
+        manual_qris_enabled: settings.manualQrisEnabled,
+        has_manual_qris: settings.manualQrisMimeType !== null,
+      },
+    };
+  }
+
+  @Get('settings/manual-qris')
+  @ApiOperation({
+    summary:
+      'Preview the uploaded manual QRIS image (served even while manual_qris_enabled is off). 404 if none uploaded.',
+  })
+  @Header('X-Content-Type-Options', 'nosniff')
+  async getManualQris(): Promise<StreamableFile> {
+    const qris = await this.settingsService.getManualQris();
+    if (!qris) {
+      throw new NotFoundException('No manual QRIS uploaded');
+    }
+    return new StreamableFile(qris.image, { type: qris.mimeType });
+  }
+
+  @Post('settings/manual-qris')
+  @ApiOperation({
+    summary:
+      'Upload/replace the manual QRIS image (multipart field `file`, PNG/JPEG/WebP, max 2MB). Show/hide it with PATCH /admin/settings { manual_qris_enabled }.',
+  })
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({
+    schema: {
+      type: 'object',
+      required: ['file'],
+      properties: { file: { type: 'string', format: 'binary' } },
+    },
+  })
+  @UseInterceptors(
+    FileInterceptor('file', { limits: { fileSize: 2 * 1024 * 1024 } }),
+  )
+  async uploadManualQris(@UploadedFile() file?: { buffer: Buffer }) {
+    if (!file) {
+      throw new BadRequestException('file is required');
+    }
+    const settings = await this.settingsService.setManualQris(file.buffer);
+    return {
+      success: true,
+      data: {
+        manual_qris_enabled: settings.manualQrisEnabled,
+        has_manual_qris: settings.manualQrisMimeType !== null,
+      },
+    };
+  }
+
+  @Delete('settings/manual-qris')
+  @ApiOperation({
+    summary:
+      'Remove the manual QRIS image (also sets manual_qris_enabled to false)',
+  })
+  async deleteManualQris() {
+    const settings = await this.settingsService.clearManualQris();
+    return {
+      success: true,
+      data: {
+        manual_qris_enabled: settings.manualQrisEnabled,
+        has_manual_qris: settings.manualQrisMimeType !== null,
       },
     };
   }
