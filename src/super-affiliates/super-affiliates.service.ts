@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ConflictException,
   ForbiddenException,
   Inject,
@@ -338,6 +339,50 @@ export class SuperAffiliatesService {
     if (changes.status !== undefined) {
       await this.usersService.updateStatus(profile.userId, changes.status);
     }
+    return this.findOrFail(id);
+  }
+
+  /** Superadmin manual add (+) / deduct (-) on commission_balance, logged like a normal credit/debit. */
+  async adjustCommissionBalance(
+    id: string,
+    amount: number,
+    reason?: string,
+  ): Promise<SuperAffiliateProfile> {
+    await this.dataSource.transaction(async (manager) => {
+      const profile = await manager.findOne(SuperAffiliateProfile, {
+        where: { id },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!profile) {
+        throw new NotFoundException(`Super affiliate ${id} not found`);
+      }
+      const newBalance = Number(profile.commissionBalance) + amount;
+      if (newBalance < 0) {
+        throw new BadRequestException(
+          `Resulting commission balance would be negative (current: ${profile.commissionBalance}, delta: ${amount})`,
+        );
+      }
+      await manager.update(SuperAffiliateProfile, profile.id, {
+        commissionBalance: newBalance.toFixed(2),
+        ...(amount > 0 && {
+          totalCommissionEarned: (
+            Number(profile.totalCommissionEarned) + amount
+          ).toFixed(2),
+        }),
+      });
+      await manager.save(
+        manager.create(SuperAffiliateCommissionLog, {
+          superAffiliateProfileId: profile.id,
+          type:
+            amount >= 0 ? CommissionLogType.CREDIT : CommissionLogType.DEBIT,
+          amount: Math.abs(amount).toFixed(2),
+          balanceAfter: newBalance.toFixed(2),
+          description: reason
+            ? `Manual adjustment by admin: ${reason}`
+            : 'Manual adjustment by admin',
+        }),
+      );
+    });
     return this.findOrFail(id);
   }
 

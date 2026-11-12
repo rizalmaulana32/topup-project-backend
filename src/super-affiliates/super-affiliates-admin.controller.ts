@@ -12,6 +12,7 @@ import {
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Request } from 'express';
+import { AdjustCommissionBalanceDto } from '../admin/dto/adjust-commission-balance.dto';
 import { ProcessWithdrawalDto } from '../admin/dto/process-withdrawal.dto';
 import { ResetAffiliatePasswordDto } from '../admin/dto/reset-affiliate-password.dto';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
@@ -91,6 +92,19 @@ export class SuperAffiliatesAdminController {
       thresholdAmount: dto.threshold_amount,
       status: dto.status,
     });
+    return { success: true, data: await this.service.getDetail(id) };
+  }
+
+  @Patch('super-affiliates/:id/commission-balance')
+  @ApiOperation({
+    summary:
+      "Manually add to or deduct from a super affiliate's commission balance - amount is added, pass a negative number to deduct",
+  })
+  async adjustCommissionBalance(
+    @Param('id') id: string,
+    @Body() dto: AdjustCommissionBalanceDto,
+  ) {
+    await this.service.adjustCommissionBalance(id, dto.amount, dto.reason);
     return { success: true, data: await this.service.getDetail(id) };
   }
 
