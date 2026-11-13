@@ -31,7 +31,8 @@ import { CreateManualTopupDto } from './dto/create-manual-topup.dto';
 import { ListManualTopupsDto } from './dto/list-manual-topups.dto';
 import { UpdateAdminDto } from './dto/update-admin.dto';
 import { AdminProfile } from './entities/admin-profile.entity';
-import { ManualTopupStatus } from './entities/manual-topup.entity';
+import { ManualTopup, ManualTopupStatus } from './entities/manual-topup.entity';
+import { ListTransferHistoryDto } from './dto/list-transfer-history.dto';
 import {
   ManualTopupSend,
   ManualTopupSendStatus,
@@ -227,6 +228,7 @@ export class ManualTopupController {
     const manualTopup = await this.manualTopupService.createManualTopup({
       momoUserId: dto.momo_user_id,
       customerName: dto.customer_name,
+      referralCode: dto.referral_code,
       totalAmount: dto.total_amount,
       amountPerSend: dto.amount_per_send,
       intervalSeconds:
@@ -295,6 +297,31 @@ export class ManualTopupController {
       success: true,
       data: {
         items: result.items.map(toManualTopupResponse),
+        total: result.total,
+        limit: query.limit ?? 20,
+        offset: query.offset ?? 0,
+      },
+    };
+  }
+
+  @Get('manual-transfers')
+  @ApiOperation({
+    summary:
+      'Manual transaction history across all admins: every individual send, newest first, filterable by status (success/failed/unknown)',
+  })
+  async listManualTransfers(@Query() query: ListTransferHistoryDto) {
+    const result = await this.manualTopupService.findSends(
+      {},
+      {
+        status: query.status,
+        limit: query.limit ?? 20,
+        offset: query.offset ?? 0,
+      },
+    );
+    return {
+      success: true,
+      data: {
+        items: result.items.map(toTransferResponse),
         total: result.total,
         limit: query.limit ?? 20,
         offset: query.offset ?? 0,
@@ -382,6 +409,7 @@ export function toManualTopupResponse(manualTopup: {
   amountPerSend: string;
   amountSent: string;
   intervalSeconds: number | null;
+  referralCode: string | null;
   status: string;
   nextRunAt: Date | null;
   createdBy: string;
@@ -400,6 +428,7 @@ export function toManualTopupResponse(manualTopup: {
       manualTopup.intervalSeconds === null
         ? null
         : manualTopup.intervalSeconds / 60,
+    referral_code: manualTopup.referralCode,
     status: manualTopup.status,
     next_run_at: manualTopup.nextRunAt,
     created_by: manualTopup.createdBy,
@@ -428,6 +457,24 @@ export function toSendResponse(send: ManualTopupSend) {
     status: send.status,
     provider_response: send.providerResponse,
     sent_at: send.sentAt,
+  };
+}
+
+/** One row of a manual transfer history list (send + the top-up it belongs to). */
+export function toTransferResponse({
+  send,
+  manualTopup,
+}: {
+  send: ManualTopupSend;
+  manualTopup: ManualTopup | undefined;
+}) {
+  return {
+    ...toSendResponse(send),
+    manual_topup_id: send.manualTopupId,
+    momo_user_id: manualTopup?.momoUserId ?? null,
+    customer_name: manualTopup?.customerName ?? null,
+    referral_code: manualTopup?.referralCode ?? null,
+    created_by: manualTopup?.createdBy ?? null,
   };
 }
 
@@ -495,6 +542,7 @@ const MANUAL_TOPUP_EXPORT_COLUMNS: [string, string][] = [
   ['amount_per_send', 'Amount per Send'],
   ['amount_sent', 'Amount Sent'],
   ['interval_seconds', 'Interval (seconds)'],
+  ['referral_code', 'Referral Code'],
   ['status', 'Status'],
   ['created_by', 'Created By (user ID)'],
 ];

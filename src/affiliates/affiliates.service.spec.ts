@@ -131,9 +131,9 @@ describe('AffiliatesService', () => {
         user: { name: 'A', email: 'a@x.com', status: UserStatus.ACTIVE },
       });
       findByReferralCodeMock.mockResolvedValue([
-        { id: 'TRX-1', targetUserId: '111' },
-        { id: 'TRX-2', targetUserId: '111' },
-        { id: 'TRX-3', targetUserId: '222' },
+        { id: 'TRX-1', targetUserId: '111', createdAt: new Date(3000) },
+        { id: 'TRX-2', targetUserId: '111', createdAt: new Date(2000) },
+        { id: 'TRX-3', targetUserId: '222', createdAt: new Date(1000) },
       ]);
       commissionLogFindMock.mockResolvedValue([]);
       checkIdMock.mockImplementation((_game: string, id: string) =>
@@ -155,6 +155,68 @@ describe('AffiliatesService', () => {
         ['111', 'Budi', 'https://a/b.png'],
         ['111', 'Budi', 'https://a/b.png'],
         ['222', null, null],
+      ]);
+    });
+
+    it('lists successful manual sends under the code as referred transactions, newest first, with Momo info on their commission logs', async () => {
+      profileFindOneMock.mockResolvedValue({
+        id: '17',
+        affiliateCode: 'LOVERS',
+        user: { name: 'A', email: 'a@x.com', status: UserStatus.ACTIVE },
+      });
+      findByReferralCodeMock.mockResolvedValue([
+        {
+          id: 'TRX-1',
+          targetUserId: '111',
+          createdAt: new Date(2000),
+          paymentStatus: 'paid',
+          grossAmount: '50.00',
+        },
+      ]);
+      commissionLogFindMock.mockResolvedValue([
+        { type: 'credit', transactionId: 'MT-1#9' },
+        { type: 'credit', transactionId: 'MT-OLD#2' },
+      ]);
+      referralCodeQueryMock.mockResolvedValue([
+        {
+          id: 'MT-1#9',
+          referral_code: 'LOVERS',
+          momo_user_id: '444',
+          amount: '100.00',
+          sent_at: new Date(3000),
+        },
+        {
+          id: 'MT-OLD#2',
+          referral_code: 'OLDCODE',
+          momo_user_id: '555',
+          amount: '10.00',
+          sent_at: new Date(1000),
+        },
+      ]);
+      checkIdMock.mockResolvedValue({ username: 'Sari', avatarUrl: 'x.png' });
+
+      const result = await service.getAdminAffiliateDetail('17');
+
+      expect(referralCodeQueryMock).toHaveBeenCalledWith(expect.any(String), [
+        'LOVERS',
+        ['MT-1#9', 'MT-OLD#2'],
+      ]);
+      // The old-code send is not a referral under the current code, but its commission log still gets Momo info.
+      expect(
+        result.referred_transactions.map((t) => [
+          t.transaction_id,
+          t.source,
+          t.target_user_id,
+          t.gross_amount,
+        ]),
+      ).toEqual([
+        ['MT-1#9', 'manual', '444', '100.00'],
+        ['TRX-1', 'gateway', '111', '50.00'],
+      ]);
+      expect(result.referred_transaction_count).toBe(2);
+      expect(result.commission_history.map((c) => c.target_user_id)).toEqual([
+        '444',
+        '555',
       ]);
     });
 

@@ -12,6 +12,8 @@ import { ManualTopupService } from './manual-topup.service';
 import { UserStatus } from '../users/entities/user.entity';
 import { UsersService } from '../users/users.service';
 import type { ProviderTopUpPort } from '../provider/provider-top-up.port';
+import type { AffiliatesService } from '../affiliates/affiliates.service';
+import type { SuperAffiliatesService } from '../super-affiliates/super-affiliates.service';
 
 describe('ManualTopupService', () => {
   let checkIdMock: jest.Mock;
@@ -25,9 +27,15 @@ describe('ManualTopupService', () => {
   let claimExecuteMock: jest.Mock;
   let sendUpdateMock: jest.Mock;
   let manualTopupUpdateMock: jest.Mock;
+  let checkCodeValidityMock: jest.Mock;
+  let affiliateCreditMock: jest.Mock;
+  let superAffiliateCreditMock: jest.Mock;
   let service: ManualTopupService;
 
   beforeEach(() => {
+    checkCodeValidityMock = jest.fn().mockResolvedValue({ valid: true });
+    affiliateCreditMock = jest.fn().mockResolvedValue('0.00');
+    superAffiliateCreditMock = jest.fn().mockResolvedValue('0.00');
     checkIdMock = jest.fn();
     injectCoinMock = jest.fn();
     profileExistsMock = jest.fn().mockResolvedValue(false);
@@ -96,6 +104,13 @@ describe('ManualTopupService', () => {
       dataSource,
       usersService,
       providerTopUp,
+      {
+        checkCodeValidity: checkCodeValidityMock,
+        creditCommissionForTransaction: affiliateCreditMock,
+      } as unknown as AffiliatesService,
+      {
+        creditCommissionForTransaction: superAffiliateCreditMock,
+      } as unknown as SuperAffiliatesService,
     );
   });
 
@@ -204,6 +219,82 @@ describe('ManualTopupService', () => {
 
       const saved = manualTopupSaveMock.mock.calls[0][0];
       expect(saved.customerName).toBe('Player_12345');
+    });
+  });
+
+  describe('referral code', () => {
+    beforeEach(() => {
+      checkIdMock.mockResolvedValue({ username: 'P', avatarUrl: null });
+    });
+
+    it('rejects a code that is not an active affiliate, before sending anything', async () => {
+      checkCodeValidityMock.mockResolvedValue({ valid: false });
+
+      await expect(
+        service.createManualTopup({
+          momoUserId: '12345',
+          totalAmount: 1000,
+          referralCode: 'NOPE',
+          createdBy: '1',
+        }),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(injectCoinMock).not.toHaveBeenCalled();
+    });
+
+    it('credits affiliate and super affiliate commission per successful send, keyed by send', async () => {
+      injectCoinMock.mockResolvedValue({ success: true, response: '{}' });
+
+      await service.createManualTopup({
+        momoUserId: '12345',
+        totalAmount: 1000,
+        referralCode: 'AFF1',
+        createdBy: '1',
+      });
+
+      const saved = (manualTopupSaveMock.mock.calls[0] as ManualTopup[])[0];
+      expect(saved.referralCode).toBe('AFF1');
+      expect(affiliateCreditMock).toHaveBeenCalledWith({
+        referralCode: 'AFF1',
+        transactionId: `${saved.id}#SEND-1`,
+        originalAmount: '1000.00',
+      });
+      expect(superAffiliateCreditMock).toHaveBeenCalledWith({
+        referralCode: 'AFF1',
+        transactionId: `${saved.id}#SEND-1`,
+        grossAmount: '1000.00',
+      });
+    });
+
+    it('credits nothing when the send is rejected', async () => {
+      injectCoinMock.mockResolvedValue({
+        success: false,
+        rejected: true,
+        response: 'no',
+      });
+
+      await service.createManualTopup({
+        momoUserId: '12345',
+        totalAmount: 1000,
+        referralCode: 'AFF1',
+        createdBy: '1',
+      });
+
+      expect(affiliateCreditMock).not.toHaveBeenCalled();
+      expect(superAffiliateCreditMock).not.toHaveBeenCalled();
+    });
+
+    it('does not fail the send when commission crediting throws', async () => {
+      injectCoinMock.mockResolvedValue({ success: true, response: '{}' });
+      affiliateCreditMock.mockRejectedValue(new Error('db down'));
+
+      await expect(
+        service.createManualTopup({
+          momoUserId: '12345',
+          totalAmount: 1000,
+          referralCode: 'AFF1',
+          createdBy: '1',
+        }),
+      ).resolves.toBeDefined();
     });
   });
 
@@ -378,6 +469,8 @@ describe('ManualTopupService admin management', () => {
       { query: referralCodeQueryMock } as unknown as DataSource,
       usersService as unknown as UsersService,
       {} as unknown as ProviderTopUpPort,
+      {} as unknown as AffiliatesService,
+      {} as unknown as SuperAffiliatesService,
     );
   });
 

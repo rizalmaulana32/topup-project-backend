@@ -17,6 +17,12 @@ export class CreateManualTopupDto {
   @IsString()
   customer_name?: string;
 
+  /** Affiliate code, same as checkout's affiliate_code - must be an active affiliate. */
+  @IsOptional()
+  @IsString()
+  @MinLength(1)
+  referral_code?: string;
+
   /** Overall amount to send. For a one-off send, omit amount_per_send/interval_seconds - this whole amount goes in one shot. */
   @Type(() => Number)
   @IsPositive()

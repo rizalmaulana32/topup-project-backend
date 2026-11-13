@@ -11,6 +11,7 @@ import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
 import * as bcrypt from 'bcrypt';
 import { DataSource, EntityManager, Repository } from 'typeorm';
 import { AffiliatorProfile } from '../affiliates/entities/affiliator-profile.entity';
+import { ManualTopupSendStatus } from '../manual-topup/entities/manual-topup-send.entity';
 import { CommissionLogType } from '../affiliates/entities/commission-log.entity';
 import {
   WithdrawalMethod,
@@ -192,14 +193,25 @@ export class SuperAffiliatesService {
   ): Promise<Map<string, number>> {
     const { start, end } = periodRange(currentPeriodKey());
     const rows: { affiliator_id: string; volume: string }[] = await db.query(
-      `SELECT ap.id::text AS affiliator_id, SUM(t.gross_amount) AS volume
-       FROM transactions t
-       JOIN affiliator_profiles ap ON ap.affiliate_code = t.referral_code
+      // Paid checkouts plus successful manual top-up sends that used a
+      // referral code; a send's id matches manualTopupSendKey().
+      `WITH v AS (
+         SELECT t.id, t.referral_code, t.gross_amount AS amount, t.paid_at AS at
+         FROM transactions t
+         WHERE t.payment_status = $2 AND t.referral_code IS NOT NULL
+         UNION ALL
+         SELECT m.id || '#' || s.id, m.referral_code, s.amount, s.sent_at
+         FROM manual_topup_sends s
+         JOIN manual_topups m ON m.id = s.manual_topup_id
+         WHERE s.status = $6 AND m.referral_code IS NOT NULL
+       )
+       SELECT ap.id::text AS affiliator_id, SUM(v.amount) AS volume
+       FROM v
+       JOIN affiliator_profiles ap ON ap.affiliate_code = v.referral_code
        WHERE ap.super_affiliate_profile_id = $1
          AND ap.deleted_at IS NULL
-         AND t.payment_status = $2
-         AND t.paid_at >= $3 AND t.paid_at < $4
-         AND ($5::varchar IS NULL OR (t.id <> $5 AND t.paid_at <= (SELECT paid_at FROM transactions WHERE id = $5)))
+         AND v.at >= $3 AND v.at < $4
+         AND ($5::varchar IS NULL OR (v.id <> $5 AND v.at <= (SELECT at FROM v WHERE id = $5)))
        GROUP BY ap.id`,
       [
         superAffiliateId,
@@ -207,6 +219,7 @@ export class SuperAffiliatesService {
         start,
         end,
         beforeTransactionId ?? null,
+        ManualTopupSendStatus.SUCCESS,
       ],
     );
     return new Map(rows.map((r) => [r.affiliator_id, Number(r.volume)]));

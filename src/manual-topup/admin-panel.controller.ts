@@ -22,6 +22,7 @@ import {
   toAdminOverview,
   toManualTopupResponse,
   toSendResponse,
+  toTransferResponse,
 } from './manual-topup.controller';
 import { ManualTopupService } from './manual-topup.service';
 
@@ -66,6 +67,7 @@ export class AdminPanelController {
     const manualTopup = await this.manualTopupService.createManualTopup({
       momoUserId: dto.momo_user_id,
       customerName: dto.customer_name,
+      referralCode: dto.referral_code,
       totalAmount: dto.total_amount,
       amountPerSend: dto.amount_per_send,
       intervalSeconds:
@@ -155,8 +157,8 @@ export class AdminPanelController {
     @Query() query: ListTransferHistoryDto,
     @Req() request: AdminRequest,
   ) {
-    const result = await this.manualTopupService.findSendsForUser(
-      request.user.id,
+    const result = await this.manualTopupService.findSends(
+      { createdBy: request.user.id },
       {
         status: query.status,
         limit: query.limit ?? 20,
@@ -166,12 +168,7 @@ export class AdminPanelController {
     return {
       success: true,
       data: {
-        items: result.items.map(({ send, manualTopup }) => ({
-          ...toSendResponse(send),
-          manual_topup_id: send.manualTopupId,
-          momo_user_id: manualTopup?.momoUserId ?? null,
-          customer_name: manualTopup?.customerName ?? null,
-        })),
+        items: result.items.map(toTransferResponse),
         total: result.total,
         limit: query.limit ?? 20,
         offset: query.offset ?? 0,

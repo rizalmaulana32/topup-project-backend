@@ -198,7 +198,8 @@ export class AffiliatesService {
       order: { createdAt: 'DESC' },
     });
 
-    const { momoInfo, historyItem } = await this.buildHistoryInfo(
+    const { historyItem, referred } = await this.buildHistoryInfo(
+      profile.affiliateCode,
       referredTransactions,
       commissionHistory,
     );
@@ -211,14 +212,8 @@ export class AffiliatesService {
       phone_number: profile.phoneNumber,
       commission_balance: profile.commissionBalance,
       total_commission_earned: profile.totalCommissionEarned,
-      referred_transaction_count: referredTransactions.length,
-      referred_transactions: referredTransactions.map((transaction) => ({
-        transaction_id: transaction.id,
-        ...momoInfo(transaction.id),
-        payment_status: transaction.paymentStatus,
-        gross_amount: transaction.grossAmount,
-        created_at: transaction.createdAt,
-      })),
+      referred_transaction_count: referred.length,
+      referred_transactions: referred,
       commission_history: commissionHistory.map(historyItem),
     };
   }
@@ -241,7 +236,8 @@ export class AffiliatesService {
       order: { createdAt: 'DESC' },
     });
 
-    const { momoInfo, historyItem } = await this.buildHistoryInfo(
+    const { historyItem, referred } = await this.buildHistoryInfo(
+      profile.affiliateCode,
       referredTransactions,
       commissionHistory,
     );
@@ -268,14 +264,8 @@ export class AffiliatesService {
       approved_by: profile.approvedBy,
       approved_at: profile.approvedAt,
       created_at: profile.createdAt,
-      referred_transaction_count: referredTransactions.length,
-      referred_transactions: referredTransactions.map((transaction) => ({
-        transaction_id: transaction.id,
-        ...momoInfo(transaction.id),
-        payment_status: transaction.paymentStatus,
-        gross_amount: transaction.grossAmount,
-        created_at: transaction.createdAt,
-      })),
+      referred_transaction_count: referred.length,
+      referred_transactions: referred,
       commission_history: commissionHistory.map(historyItem),
       withdrawals: withdrawals.map((withdrawal) => ({
         withdrawal_id: withdrawal.id,
@@ -313,7 +303,38 @@ export class AffiliatesService {
     );
   }
 
+  /**
+   * Successful manual top-up sends (ManualTopupService) made under `code`,
+   * plus any whose key is in `keys` (commission logs under an older code).
+   * id matches manualTopupSendKey() / the commission log transaction_id.
+   */
+  private async findManualSends(
+    code: string | null,
+    keys: string[],
+  ): Promise<
+    {
+      id: string;
+      referral_code: string | null;
+      momo_user_id: string;
+      amount: string;
+      sent_at: Date;
+    }[]
+  > {
+    if (!code && !keys.length) return [];
+    return this.dataSource.query(
+      `SELECT m.id || '#' || s.id AS id, m.referral_code, m.momo_user_id,
+              s.amount, s.sent_at
+       FROM manual_topup_sends s
+       JOIN manual_topups m ON m.id = s.manual_topup_id
+       WHERE s.status = 'success'
+         AND (m.referral_code = $1 OR m.id || '#' || s.id = ANY($2))
+       ORDER BY s.sent_at DESC`,
+      [code, keys],
+    );
+  }
+
   private async buildHistoryInfo(
+    affiliateCode: string | null,
     referredTransactions: Transaction[],
     commissionHistory: CommissionLog[],
   ) {
@@ -324,20 +345,25 @@ export class AffiliatesService {
 
     // Commission logs can point at transactions made under an older referral
     // code (the code is editable), so they're loaded by ID, not via referredTransactions.
-    const [commissionTransactions, withdrawals] = await Promise.all([
-      this.transactionsService.findByIds(idsOf('transactionId')),
-      idsOf('withdrawalId').length
-        ? this.withdrawalRepository.find({
-            where: { id: In(idsOf('withdrawalId')) },
-          })
-        : Promise.resolve([]),
+    const [commissionTransactions, withdrawals, manualSends] =
+      await Promise.all([
+        this.transactionsService.findByIds(idsOf('transactionId')),
+        idsOf('withdrawalId').length
+          ? this.withdrawalRepository.find({
+              where: { id: In(idsOf('withdrawalId')) },
+            })
+          : Promise.resolve([]),
+        this.findManualSends(
+          affiliateCode,
+          idsOf('transactionId').filter((id) => id.includes('#')),
+        ),
+      ]);
+    const targetUserIdByTransaction = new Map([
+      ...[...referredTransactions, ...commissionTransactions].map(
+        (t) => [t.id, t.targetUserId] as const,
+      ),
+      ...manualSends.map((m) => [m.id, m.momo_user_id] as const),
     ]);
-    const targetUserIdByTransaction = new Map(
-      [...referredTransactions, ...commissionTransactions].map((t) => [
-        t.id,
-        t.targetUserId,
-      ]),
-    );
     const withdrawalById = new Map(withdrawals.map((w) => [w.id, w]));
 
     // Same lookup as POST /topup/check-id, once per distinct Momo ID; a failed
@@ -397,7 +423,29 @@ export class AffiliatesService {
       created_at: log.createdAt,
     });
 
-    return { momoInfo, historyItem };
+    // Gateway checkouts and successful manual sends under the current code, newest first.
+    const referred = [
+      ...referredTransactions.map((transaction) => ({
+        transaction_id: transaction.id,
+        source: 'gateway' as const,
+        ...momoInfo(transaction.id),
+        payment_status: transaction.paymentStatus,
+        gross_amount: transaction.grossAmount,
+        created_at: transaction.createdAt,
+      })),
+      ...manualSends
+        .filter((m) => affiliateCode && m.referral_code === affiliateCode)
+        .map((m) => ({
+          transaction_id: m.id,
+          source: 'manual' as const,
+          ...momoInfo(m.id),
+          payment_status: 'paid',
+          gross_amount: m.amount,
+          created_at: new Date(m.sent_at),
+        })),
+    ].sort((a, b) => b.created_at.getTime() - a.created_at.getTime());
+
+    return { historyItem, referred };
   }
 
   async findProfileByIdOrFail(profileId: string): Promise<AffiliatorProfile> {

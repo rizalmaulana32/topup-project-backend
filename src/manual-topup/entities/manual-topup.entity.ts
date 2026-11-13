@@ -70,6 +70,10 @@ export class ManualTopup {
   @Column({ name: 'locked_at', type: 'timestamptz', nullable: true })
   lockedAt: Date | null;
 
+  /** Affiliate code - each successful send earns commission exactly like a referred checkout. */
+  @Column({ name: 'referral_code', type: 'varchar', nullable: true })
+  referralCode: string | null;
+
   @Column({ name: 'created_by', type: 'bigint' })
   createdBy: string;
 

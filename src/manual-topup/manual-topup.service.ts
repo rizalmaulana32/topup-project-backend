@@ -19,6 +19,7 @@ import {
   LessThanOrEqual,
   Repository,
 } from 'typeorm';
+import { AffiliatesService } from '../affiliates/affiliates.service';
 import { AffiliatorProfile } from '../affiliates/entities/affiliator-profile.entity';
 import { generateOrderId } from '../common/utils/id-generator.util';
 import {
@@ -30,6 +31,7 @@ import type {
   InjectCoinResult,
   ProviderTopUpPort,
 } from '../provider/provider-top-up.port';
+import { SuperAffiliatesService } from '../super-affiliates/super-affiliates.service';
 import { UserRole, UserStatus } from '../users/entities/user.entity';
 import { UsersService } from '../users/users.service';
 import { AdminProfile } from './entities/admin-profile.entity';
@@ -51,6 +53,10 @@ const STALE_LOCK_SECONDS = 300;
 /** Retry delay after a failed provider call for one-off sends (no interval of their own). */
 const ONE_OFF_RETRY_SECONDS = 60;
 
+/** Commission-log transaction_id of one manual send; super-affiliate month volumes build the same key in SQL. */
+export const manualTopupSendKey = (manualTopupId: string, sendId: string) =>
+  `${manualTopupId}#${sendId}`;
+
 @Injectable()
 export class ManualTopupService {
   private readonly logger = new Logger(ManualTopupService.name);
@@ -66,6 +72,8 @@ export class ManualTopupService {
     private readonly usersService: UsersService,
     @Inject(PROVIDER_TOP_UP_PORT)
     private readonly providerTopUp: ProviderTopUpPort,
+    private readonly affiliatesService: AffiliatesService,
+    private readonly superAffiliatesService: SuperAffiliatesService,
   ) {}
 
   // ---- Admin account management (superadmin-only) ----
@@ -303,6 +311,7 @@ export class ManualTopupService {
   async createManualTopup(params: {
     momoUserId: string;
     customerName?: string;
+    referralCode?: string;
     totalAmount: number;
     amountPerSend?: number;
     intervalSeconds?: number;
@@ -327,6 +336,16 @@ export class ManualTopupService {
     if (isScheduled && params.amountPerSend! > params.totalAmount) {
       throw new BadRequestException(
         'amount_per_send cannot exceed total_amount',
+      );
+    }
+
+    if (
+      params.referralCode &&
+      !(await this.affiliatesService.checkCodeValidity(params.referralCode))
+        .valid
+    ) {
+      throw new BadRequestException(
+        `referral_code ${params.referralCode} is not an active affiliate code`,
       );
     }
 
@@ -368,6 +387,7 @@ export class ManualTopupService {
         amountPerSend: (params.amountPerSend ?? params.totalAmount).toFixed(2),
         amountSent: '0.00',
         intervalSeconds: isScheduled ? (params.intervalSeconds ?? null) : null,
+        referralCode: params.referralCode ?? null,
         status: ManualTopupStatus.ACTIVE,
         nextRunAt: null,
         lockedAt,
@@ -417,20 +437,38 @@ export class ManualTopupService {
   }
 
   /** Every individual coin send across all of one user's manual top-ups, newest first, with the top-up each belongs to. */
-  async findSendsForUser(
-    userId: string,
+  /**
+   * Manual transfer history (one row per send), newest first. scope: createdBy
+   * = one admin's sends, referralCodes = sends made under those affiliate
+   * codes, {} = everyone's (superadmin).
+   */
+  async findSends(
+    scope: { createdBy?: string; referralCodes?: string[] },
     params: { status?: ManualTopupSendStatus; limit: number; offset: number },
   ): Promise<{
     items: { send: ManualTopupSend; manualTopup: ManualTopup | undefined }[];
     total: number;
   }> {
+    if (scope.referralCodes && !scope.referralCodes.length) {
+      return { items: [], total: 0 };
+    }
     const qb = this.sendRepository
       .createQueryBuilder('send')
       .innerJoin(ManualTopup, 'topup', 'topup.id = send.manual_topup_id')
-      .where('topup.created_by = :userId', { userId })
       .orderBy('send.sentAt', 'DESC')
+      .addOrderBy('send.id', 'DESC')
       .take(params.limit)
       .skip(params.offset);
+    if (scope.createdBy) {
+      qb.andWhere('topup.created_by = :createdBy', {
+        createdBy: scope.createdBy,
+      });
+    }
+    if (scope.referralCodes) {
+      qb.andWhere('topup.referral_code IN (:...codes)', {
+        codes: scope.referralCodes,
+      });
+    }
     if (params.status) {
       qb.andWhere('send.status = :status', { status: params.status });
     }
@@ -449,6 +487,36 @@ export class ManualTopupService {
       })),
       total,
     };
+  }
+
+  /**
+   * Codes whose manual sends an affiliate / super affiliate may see: the
+   * affiliate's own code, or every live downline affiliate's code (same
+   * downline rule as super-affiliate month volumes).
+   * ponytail: current codes only - sends under a since-edited code drop out,
+   * same as referred_transactions on the affiliate dashboard.
+   */
+  async referralCodesForUser(
+    userId: string,
+    role: UserRole.AFFILIATOR | UserRole.SUPER_AFFILIATE,
+  ): Promise<string[]> {
+    const qb = this.dataSource
+      .getRepository(AffiliatorProfile)
+      .createQueryBuilder('ap')
+      .select('ap.affiliate_code', 'code')
+      .where('ap.affiliate_code IS NOT NULL');
+    if (role === UserRole.AFFILIATOR) {
+      qb.andWhere('ap.user_id = :userId', { userId });
+    } else {
+      // Soft-deleted downline is excluded automatically (DeleteDateColumn).
+      qb.innerJoin(
+        'super_affiliate_profiles',
+        'sa',
+        'sa.id = ap.super_affiliate_profile_id',
+      ).andWhere('sa.user_id = :userId', { userId });
+    }
+    const rows: { code: string }[] = await qb.getRawMany();
+    return rows.map((r) => r.code);
   }
 
   async cancel(id: string, ownerUserId?: string): Promise<ManualTopup> {
@@ -786,6 +854,46 @@ export class ManualTopupService {
     if (sendStatus === ManualTopupSendStatus.UNKNOWN) {
       this.logger.error(
         `Manual top-up ${manualTopup.id}: send ${send.id} outcome unknown (${result.response}) - paused for manual check`,
+      );
+    }
+
+    if (
+      sendStatus === ManualTopupSendStatus.SUCCESS &&
+      manualTopup.referralCode
+    ) {
+      await this.creditReferralCommission(manualTopup, send.id, amount);
+    }
+  }
+
+  /**
+   * Same commission flow as a referred checkout (TopupService.handleInvoicePaid),
+   * once per successful send with the coin amount as the gross amount (no bonus
+   * coin on a manual send). Keyed per send so the super affiliate's
+   * once-per-transaction guard allows every installment. The coin already went
+   * out, so a crediting failure is logged, never thrown into the send flow.
+   */
+  private async creditReferralCommission(
+    manualTopup: ManualTopup,
+    sendId: string,
+    amount: number,
+  ): Promise<void> {
+    const transactionId = manualTopupSendKey(manualTopup.id, sendId);
+    const referralCode = manualTopup.referralCode!;
+    const grossAmount = amount.toFixed(2);
+    try {
+      await this.affiliatesService.creditCommissionForTransaction({
+        referralCode,
+        transactionId,
+        originalAmount: grossAmount,
+      });
+      await this.superAffiliatesService.creditCommissionForTransaction({
+        referralCode,
+        transactionId,
+        grossAmount,
+      });
+    } catch (error) {
+      this.logger.error(
+        `Commission credit failed for manual send ${transactionId} (code ${referralCode}, amount ${grossAmount}) - credit it manually: ${error instanceof Error ? error.message : 'unknown error'}`,
       );
     }
   }
