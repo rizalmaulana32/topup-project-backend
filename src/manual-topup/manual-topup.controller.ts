@@ -218,7 +218,7 @@ export class ManualTopupController {
   @Roles(UserRole.SUPERADMIN, UserRole.ADMIN)
   @ApiOperation({
     summary:
-      'Send coin directly to a MomoLive ID with no payment gateway involved - either once now (total_installments=1) or as a repeating schedule (total_installments>1 + interval_days, first installment sent immediately, the rest via the hourly scheduler)',
+      'Send coin directly to a MomoLive ID with no payment gateway involved - either once now (total_amount only) or as a repeating schedule (amount_per_send + interval_seconds, first send immediately, the rest via the per-second scheduler)',
   })
   async createManualTopup(
     @Body() dto: CreateManualTopupDto,
@@ -229,7 +229,11 @@ export class ManualTopupController {
       customerName: dto.customer_name,
       totalAmount: dto.total_amount,
       amountPerSend: dto.amount_per_send,
-      intervalMinutes: dto.interval_minutes,
+      intervalSeconds:
+        dto.interval_seconds ??
+        (dto.interval_minutes !== undefined
+          ? dto.interval_minutes * 60
+          : undefined),
       createdBy: request.user.id,
     });
     return { success: true, data: toManualTopupResponse(manualTopup) };
@@ -263,7 +267,7 @@ export class ManualTopupController {
         total_amount: Number(manualTopup.totalAmount),
         amount_per_send: Number(manualTopup.amountPerSend),
         amount_sent: Number(manualTopup.amountSent),
-        interval_minutes: manualTopup.intervalMinutes,
+        interval_seconds: manualTopup.intervalSeconds,
         status: manualTopup.status,
         created_by: manualTopup.createdBy,
       })),
@@ -377,7 +381,7 @@ export function toManualTopupResponse(manualTopup: {
   totalAmount: string;
   amountPerSend: string;
   amountSent: string;
-  intervalMinutes: number | null;
+  intervalSeconds: number | null;
   status: string;
   nextRunAt: Date | null;
   createdBy: string;
@@ -390,7 +394,12 @@ export function toManualTopupResponse(manualTopup: {
     total_amount: manualTopup.totalAmount,
     amount_per_send: manualTopup.amountPerSend,
     amount_sent: manualTopup.amountSent,
-    interval_minutes: manualTopup.intervalMinutes,
+    interval_seconds: manualTopup.intervalSeconds,
+    /** Deprecated, kept for older FE builds; fractional for non-minute intervals. */
+    interval_minutes:
+      manualTopup.intervalSeconds === null
+        ? null
+        : manualTopup.intervalSeconds / 60,
     status: manualTopup.status,
     next_run_at: manualTopup.nextRunAt,
     created_by: manualTopup.createdBy,
@@ -485,7 +494,7 @@ const MANUAL_TOPUP_EXPORT_COLUMNS: [string, string][] = [
   ['total_amount', 'Total Amount'],
   ['amount_per_send', 'Amount per Send'],
   ['amount_sent', 'Amount Sent'],
-  ['interval_minutes', 'Interval (minutes)'],
+  ['interval_seconds', 'Interval (seconds)'],
   ['status', 'Status'],
   ['created_by', 'Created By (user ID)'],
 ];

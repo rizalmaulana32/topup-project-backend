@@ -141,6 +141,10 @@ export class MomoProviderTopUpService implements ProviderTopUpPort {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(signedParams),
+      // A hung call must not stall callers forever (the manual top-up
+      // sweep is sequential). A timeout isn't a BadRequestException, so
+      // injectCoin reports it as an unknown outcome, never as "rejected".
+      signal: AbortSignal.timeout(MOMO_TIMEOUT_MS),
     });
 
     if (!response.ok) {
@@ -168,6 +172,8 @@ export class MomoProviderTopUpService implements ProviderTopUpPort {
     return body.data;
   }
 }
+
+const MOMO_TIMEOUT_MS = 60_000;
 
 function currentTimestamp(): number {
   return Math.floor(Date.now() / 1000);

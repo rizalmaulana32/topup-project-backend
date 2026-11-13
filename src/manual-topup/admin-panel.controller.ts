@@ -57,7 +57,7 @@ export class AdminPanelController {
   @Post('manual-topups')
   @ApiOperation({
     summary:
-      'Send coin to a MomoLive ID - once (total_amount only) or as a schedule (amount_per_send + interval_minutes). Rejected if total_amount exceeds the remaining coin_limit.',
+      'Send coin to a MomoLive ID - once (total_amount only) or as a schedule (amount_per_send + interval_seconds). Rejected if total_amount exceeds the remaining coin_limit.',
   })
   async createManualTopup(
     @Body() dto: CreateManualTopupDto,
@@ -68,7 +68,11 @@ export class AdminPanelController {
       customerName: dto.customer_name,
       totalAmount: dto.total_amount,
       amountPerSend: dto.amount_per_send,
-      intervalMinutes: dto.interval_minutes,
+      intervalSeconds:
+        dto.interval_seconds ??
+        (dto.interval_minutes !== undefined
+          ? dto.interval_minutes * 60
+          : undefined),
       createdBy: request.user.id,
     });
     return { success: true, data: toManualTopupResponse(manualTopup) };

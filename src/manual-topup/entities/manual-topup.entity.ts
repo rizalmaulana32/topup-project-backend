@@ -1,9 +1,4 @@
-import {
-  Column,
-  CreateDateColumn,
-  Entity,
-  PrimaryColumn,
-} from 'typeorm';
+import { Column, CreateDateColumn, Entity, PrimaryColumn } from 'typeorm';
 
 export enum ManualTopupStatus {
   ACTIVE = 'active',
@@ -17,12 +12,12 @@ export enum ManualTopupStatus {
  * Manual, no-payment-gateway coin send (client request via Ricky
  * 2026-11-02: "pengisian manual tanpa payment gateway"). Two modes, unified
  * by the same send loop:
- * - One-off ("kirim sekarang"): intervalMinutes is null, amountPerSend ==
+ * - One-off ("kirim sekarang"): intervalSeconds is null, amountPerSend ==
  *   totalAmount, sent once immediately, completes right away.
  * - Scheduled/partial ("partial berjangka", corrected 2026-11-02: "misal
  *   di set topup 10000, per berapa menit iku ngirim 100, sampek entek" -
  *   totalAmount is the overall target, amountPerSend is sent every
- *   intervalMinutes until amountSent reaches totalAmount; the final send
+ *   intervalSeconds until amountSent reaches totalAmount; the final send
  *   takes whatever remainder is left rather than overshooting).
  */
 @Entity('manual_topups')
@@ -56,9 +51,9 @@ export class ManualTopup {
   })
   amountSent: string;
 
-  /** Null = one-off "send now"; otherwise minutes between each send. */
-  @Column({ name: 'interval_minutes', type: 'int', nullable: true })
-  intervalMinutes: number | null;
+  /** Null = one-off "send now"; otherwise seconds between each send. (Legacy interval_minutes column still exists in the DB, unused.) */
+  @Column({ name: 'interval_seconds', type: 'int', nullable: true })
+  intervalSeconds: number | null;
 
   @Column({
     type: 'enum',
@@ -70,6 +65,10 @@ export class ManualTopup {
   /** When the next send is due; null once completed/cancelled. */
   @Column({ name: 'next_run_at', type: 'timestamptz', nullable: true })
   nextRunAt: Date | null;
+
+  /** Set while a send is in flight (per-top-up lock + owner token); see ManualTopupService.claim. */
+  @Column({ name: 'locked_at', type: 'timestamptz', nullable: true })
+  lockedAt: Date | null;
 
   @Column({ name: 'created_by', type: 'bigint' })
   createdBy: string;

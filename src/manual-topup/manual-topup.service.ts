@@ -6,11 +6,19 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  UnprocessableEntityException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Cron, CronExpression } from '@nestjs/schedule';
+import { Interval } from '@nestjs/schedule';
 import * as bcrypt from 'bcrypt';
-import { DataSource, In, LessThanOrEqual, Repository } from 'typeorm';
+import {
+  DataSource,
+  In,
+  IsNull,
+  LessThan,
+  LessThanOrEqual,
+  Repository,
+} from 'typeorm';
 import { AffiliatorProfile } from '../affiliates/entities/affiliator-profile.entity';
 import { generateOrderId } from '../common/utils/id-generator.util';
 import {
@@ -18,7 +26,10 @@ import {
   generateUniqueReferralCode,
 } from '../common/utils/referral-code.util';
 import { PROVIDER_TOP_UP_PORT } from '../provider/provider-top-up.port';
-import type { ProviderTopUpPort } from '../provider/provider-top-up.port';
+import type {
+  InjectCoinResult,
+  ProviderTopUpPort,
+} from '../provider/provider-top-up.port';
 import { UserRole, UserStatus } from '../users/entities/user.entity';
 import { UsersService } from '../users/users.service';
 import { AdminProfile } from './entities/admin-profile.entity';
@@ -30,6 +41,15 @@ import {
 
 const BCRYPT_SALT_ROUNDS = 10;
 const MANUAL_TOPUP_GAME_CODE = 'MANUAL_TOPUP';
+export const MIN_INTERVAL_SECONDS = 5;
+/**
+ * A lock older than this means the process died mid-send (the provider call
+ * itself times out well before - see MomoProviderTopUpService). The outcome
+ * of that send is unknown, so the schedule is paused, never auto-resent.
+ */
+const STALE_LOCK_SECONDS = 300;
+/** Retry delay after a failed provider call for one-off sends (no interval of their own). */
+const ONE_OFF_RETRY_SECONDS = 60;
 
 @Injectable()
 export class ManualTopupService {
@@ -285,15 +305,23 @@ export class ManualTopupService {
     customerName?: string;
     totalAmount: number;
     amountPerSend?: number;
-    intervalMinutes?: number;
+    intervalSeconds?: number;
     createdBy: string;
   }): Promise<ManualTopup> {
     const isScheduled =
       params.amountPerSend !== undefined ||
-      params.intervalMinutes !== undefined;
-    if (isScheduled && (!params.amountPerSend || !params.intervalMinutes)) {
+      params.intervalSeconds !== undefined;
+    if (
+      params.intervalSeconds !== undefined &&
+      params.intervalSeconds < MIN_INTERVAL_SECONDS
+    ) {
+      throw new UnprocessableEntityException(
+        `interval_seconds must be at least ${MIN_INTERVAL_SECONDS} seconds (got ${params.intervalSeconds})`,
+      );
+    }
+    if (isScheduled && (!params.amountPerSend || !params.intervalSeconds)) {
       throw new BadRequestException(
-        'amount_per_send and interval_minutes must be given together for a scheduled send',
+        'amount_per_send and interval_seconds must be given together for a scheduled send',
       );
     }
     if (isScheduled && params.amountPerSend! > params.totalAmount) {
@@ -327,6 +355,8 @@ export class ManualTopupService {
       params.momoUserId,
     );
 
+    // Born locked, so nothing else can send it while the first send runs.
+    const lockedAt = new Date();
     const manualTopup = await this.manualTopupRepository.save(
       this.manualTopupRepository.create({
         id: generateOrderId('MTU'),
@@ -337,14 +367,15 @@ export class ManualTopupService {
         // below exhausts it and completes immediately.
         amountPerSend: (params.amountPerSend ?? params.totalAmount).toFixed(2),
         amountSent: '0.00',
-        intervalMinutes: isScheduled ? (params.intervalMinutes ?? null) : null,
+        intervalSeconds: isScheduled ? (params.intervalSeconds ?? null) : null,
         status: ManualTopupStatus.ACTIVE,
         nextRunAt: null,
+        lockedAt,
         createdBy: params.createdBy,
       }),
     );
 
-    await this.sendInstallment(manualTopup);
+    await this.sendLocked(manualTopup, lockedAt);
 
     return this.manualTopupRepository.findOneByOrFail({
       id: manualTopup.id,
@@ -470,39 +501,115 @@ export class ManualTopupService {
     return this.findByIdOrFail(id);
   }
 
+  private sweeping = false;
+
   /**
    * Sweep for scheduled/partial manual top-ups (client request via Ricky
-   * 2026-11-02, corrected same day: "misal di set topup 10000, per berapa
-   * menit iku ngirim 100, sampek entek" - genuinely minute-level intervals,
-   * so this runs every minute like the LinkQu reconciliation sweep, not
-   * hourly) - sends the next due installment for every ACTIVE schedule
-   * whose nextRunAt has passed.
+   * 2026-11-02: "misal di set topup 10000, per berapa menit iku ngirim 100,
+   * sampek entek"; later extended to second-level intervals) - runs every
+   * second and sends the next due installment for every ACTIVE schedule
+   * whose nextRunAt has passed. Overlapping ticks are skipped; each row is
+   * claimed atomically (claim) so it's never sent twice concurrently, even
+   * across instances.
    */
-  @Cron(CronExpression.EVERY_MINUTE)
+  @Interval(1000)
   async processDueInstallments(): Promise<void> {
-    const due = await this.manualTopupRepository.find({
-      where: {
-        status: ManualTopupStatus.ACTIVE,
-        nextRunAt: LessThanOrEqual(new Date()),
-      },
-    });
-
-    if (due.length === 0) {
+    if (this.sweeping) {
       return;
     }
+    this.sweeping = true;
+    try {
+      await this.pauseStaleLocks();
 
-    this.logger.log(
-      `Processing ${due.length} due manual top-up installment(s)`,
-    );
+      const due = await this.manualTopupRepository.find({
+        select: { id: true },
+        where: {
+          status: ManualTopupStatus.ACTIVE,
+          nextRunAt: LessThanOrEqual(new Date()),
+          lockedAt: IsNull(),
+        },
+      });
 
-    for (const manualTopup of due) {
-      try {
-        await this.sendInstallment(manualTopup);
-      } catch (error) {
-        this.logger.warn(
-          `Manual top-up installment failed for ${manualTopup.id}: ${error instanceof Error ? error.message : 'unknown error'}`,
-        );
+      for (const { id } of due) {
+        try {
+          const lockedAt = new Date();
+          const manualTopup = await this.claim(id, lockedAt);
+          if (manualTopup) {
+            await this.sendLocked(manualTopup, lockedAt);
+          }
+        } catch (error) {
+          this.logger.warn(
+            `Manual top-up installment failed for ${id}: ${error instanceof Error ? error.message : 'unknown error'}`,
+          );
+        }
       }
+    } finally {
+      this.sweeping = false;
+    }
+  }
+
+  /**
+   * Per-top-up lock: sets lockedAt only if the row is still ACTIVE, due and
+   * unlocked, so exactly one caller wins. Returns the fresh row (read after
+   * the lock, so amountSent is current), or null if someone else has it or
+   * it was paused/cancelled meanwhile.
+   */
+  private async claim(id: string, lockedAt: Date): Promise<ManualTopup | null> {
+    const result = await this.manualTopupRepository
+      .createQueryBuilder()
+      .update(ManualTopup)
+      .set({ lockedAt })
+      .where('id = :id', { id })
+      .andWhere('status = :status', { status: ManualTopupStatus.ACTIVE })
+      .andWhere('next_run_at <= now()')
+      .andWhere('locked_at IS NULL')
+      .execute();
+    if (!result.affected) {
+      return null;
+    }
+    return this.manualTopupRepository.findOneBy({ id });
+  }
+
+  /** Runs one send under an already-held lock and always releases it - only if it's still ours (lockedAt is the owner token). */
+  private async sendLocked(
+    manualTopup: ManualTopup,
+    lockedAt: Date,
+  ): Promise<void> {
+    try {
+      await this.sendInstallment(manualTopup);
+    } finally {
+      await this.manualTopupRepository.update(
+        { id: manualTopup.id, lockedAt },
+        { lockedAt: null },
+      );
+    }
+  }
+
+  /**
+   * A lock that outlived STALE_LOCK_SECONDS belongs to a process that died
+   * mid-send: the coin may or may not have gone out (its send row stays
+   * 'unknown'), so pause the schedule for an admin to check, and unlock it.
+   */
+  private async pauseStaleLocks(): Promise<void> {
+    const staleBefore = new Date(Date.now() - STALE_LOCK_SECONDS * 1000);
+    const stale = await this.manualTopupRepository.find({
+      select: { id: true, status: true, lockedAt: true },
+      where: { lockedAt: LessThan(staleBefore) },
+    });
+    for (const { id, status, lockedAt } of stale) {
+      await this.manualTopupRepository.update(
+        { id, lockedAt: lockedAt! },
+        status === ManualTopupStatus.ACTIVE
+          ? {
+              lockedAt: null,
+              status: ManualTopupStatus.PAUSED,
+              nextRunAt: null,
+            }
+          : { lockedAt: null },
+      );
+      this.logger.error(
+        `Manual top-up ${id}: send was interrupted (stale lock from ${lockedAt!.toISOString()}), outcome unknown - paused for manual check`,
+      );
     }
   }
 
@@ -523,7 +630,9 @@ export class ManualTopupService {
 
   /**
    * Sends one installment (immediate first send on creation, or a due
-   * scheduled one from the cron). Reserves the creator's coin budget
+   * scheduled one from the sweep). Caller must hold the lock (sendLocked).
+   * Status/nextRunAt writes are guarded by status = ACTIVE, so a pause or
+   * cancel that lands mid-send is never overwritten. Reserves the creator's coin budget
    * (if they have an AdminProfile - a superadmin has none and is
    * unlimited) BEFORE the provider call, refunding it if the call fails,
    * rather than holding a DB transaction open across the external HTTP
@@ -557,9 +666,10 @@ export class ManualTopupService {
       try {
         await this.reserveBudget(manualTopup.createdBy, amount);
       } catch (error) {
-        await this.manualTopupRepository.update(manualTopup.id, {
-          status: ManualTopupStatus.PAUSED,
-        });
+        await this.manualTopupRepository.update(
+          { id: manualTopup.id, status: ManualTopupStatus.ACTIVE },
+          { status: ManualTopupStatus.PAUSED, nextRunAt: null },
+        );
         this.logger.warn(
           `Paused manual top-up ${manualTopup.id}: ${error instanceof Error ? error.message : 'insufficient coin limit'}`,
         );
@@ -567,53 +677,117 @@ export class ManualTopupService {
       }
     }
 
-    const result = await this.providerTopUp.injectCoin({
-      productProviderCode: MANUAL_TOPUP_GAME_CODE,
-      targetUserId: manualTopup.momoUserId,
-      coin: amount,
-    });
-
-    await this.sendRepository.save(
+    // Written before the provider call: if the process dies mid-call this
+    // row stays 'unknown' as the record of a possibly-sent installment.
+    const send = await this.sendRepository.save(
       this.sendRepository.create({
         manualTopupId: manualTopup.id,
         amount: amount.toFixed(2),
-        status: result.success
-          ? ManualTopupSendStatus.SUCCESS
-          : ManualTopupSendStatus.FAILED,
-        providerResponse: result.response,
+        status: ManualTopupSendStatus.UNKNOWN,
+        providerResponse: null,
       }),
     );
 
-    if (!result.success) {
-      if (hasAdminProfile) {
-        await this.refundBudget(manualTopup.createdBy, amount);
-      }
-      // Retry on the next cron tick rather than advancing the schedule.
-      await this.manualTopupRepository.update(manualTopup.id, {
-        nextRunAt: new Date(),
+    let result: InjectCoinResult;
+    try {
+      result = await this.providerTopUp.injectCoin({
+        productProviderCode: MANUAL_TOPUP_GAME_CODE,
+        targetUserId: manualTopup.momoUserId,
+        coin: amount,
       });
-      return;
+    } catch (error) {
+      result = {
+        success: false,
+        response: error instanceof Error ? error.message : 'unknown error',
+      };
     }
 
-    if (hasAdminProfile) {
-      await this.profileRepository.increment(
-        { userId: manualTopup.createdBy },
-        'totalCoinSent',
-        amount,
+    const sendStatus = result.success
+      ? ManualTopupSendStatus.SUCCESS
+      : result.rejected
+        ? ManualTopupSendStatus.FAILED
+        : ManualTopupSendStatus.UNKNOWN;
+    const now = Date.now();
+    const onlyIfActive = {
+      id: manualTopup.id,
+      status: ManualTopupStatus.ACTIVE,
+    };
+
+    // Each outcome's writes are one transaction: a crash can never leave a
+    // send marked success with amountSent behind (-> resent on resume), or
+    // a refused send without its refund.
+    await this.dataSource.transaction(async (manager) => {
+      await manager.update(ManualTopupSend, send.id, {
+        status: sendStatus,
+        providerResponse: result.response,
+      });
+
+      if (sendStatus === ManualTopupSendStatus.UNKNOWN) {
+        // Timeout / 5xx / network error: the coin may have been delivered.
+        // Retrying could double-send and refunding could free budget that
+        // was actually spent, so keep it reserved and pause for an admin.
+        await manager.update(ManualTopup, onlyIfActive, {
+          status: ManualTopupStatus.PAUSED,
+          nextRunAt: null,
+        });
+        return;
+      }
+
+      if (sendStatus === ManualTopupSendStatus.FAILED) {
+        // Provider definitely refused - nothing was sent, so refund and
+        // retry after one interval (not the next 1s tick, which would
+        // hammer it).
+        if (hasAdminProfile) {
+          await manager.increment(
+            AdminProfile,
+            { userId: manualTopup.createdBy },
+            'coinLimit',
+            amount,
+          );
+        }
+        const retrySeconds =
+          manualTopup.intervalSeconds ?? ONE_OFF_RETRY_SECONDS;
+        await manager.update(ManualTopup, onlyIfActive, {
+          nextRunAt: new Date(now + retrySeconds * 1000),
+        });
+        return;
+      }
+
+      if (hasAdminProfile) {
+        await manager.increment(
+          AdminProfile,
+          { userId: manualTopup.createdBy },
+          'totalCoinSent',
+          amount,
+        );
+      }
+      // amountSent is recorded whatever the status now is (the coin went
+      // out); the next run is only scheduled if nobody paused/cancelled it.
+      const amountSent = Number(manualTopup.amountSent) + amount;
+      const completed = amountSent >= Number(manualTopup.totalAmount);
+      await manager.update(
+        ManualTopup,
+        manualTopup.id,
+        completed
+          ? {
+              amountSent: amountSent.toFixed(2),
+              status: ManualTopupStatus.COMPLETED,
+              nextRunAt: null,
+            }
+          : { amountSent: amountSent.toFixed(2) },
+      );
+      if (!completed) {
+        await manager.update(ManualTopup, onlyIfActive, {
+          nextRunAt: new Date(now + (manualTopup.intervalSeconds ?? 0) * 1000),
+        });
+      }
+    });
+
+    if (sendStatus === ManualTopupSendStatus.UNKNOWN) {
+      this.logger.error(
+        `Manual top-up ${manualTopup.id}: send ${send.id} outcome unknown (${result.response}) - paused for manual check`,
       );
     }
-
-    const amountSent = Number(manualTopup.amountSent) + amount;
-    const completed = amountSent >= Number(manualTopup.totalAmount);
-    await this.manualTopupRepository.update(manualTopup.id, {
-      amountSent: amountSent.toFixed(2),
-      status: completed
-        ? ManualTopupStatus.COMPLETED
-        : ManualTopupStatus.ACTIVE,
-      nextRunAt: completed
-        ? null
-        : new Date(Date.now() + (manualTopup.intervalMinutes ?? 0) * 60 * 1000),
-    });
   }
 
   private async reserveBudget(
@@ -640,31 +814,6 @@ export class ManualTopupService {
       await queryRunner.manager.update(AdminProfile, profile.id, {
         coinLimit: newLimit.toFixed(2),
       });
-      await queryRunner.commitTransaction();
-    } catch (error) {
-      await queryRunner.rollbackTransaction();
-      throw error;
-    } finally {
-      await queryRunner.release();
-    }
-  }
-
-  private async refundBudget(createdBy: string, amount: number): Promise<void> {
-    const queryRunner = this.dataSource.createQueryRunner();
-    await queryRunner.connect();
-    await queryRunner.startTransaction();
-
-    try {
-      const profile = await queryRunner.manager.findOne(AdminProfile, {
-        where: { userId: createdBy },
-        lock: { mode: 'pessimistic_write' },
-      });
-      if (profile) {
-        const newLimit = Number(profile.coinLimit) + amount;
-        await queryRunner.manager.update(AdminProfile, profile.id, {
-          coinLimit: newLimit.toFixed(2),
-        });
-      }
       await queryRunner.commitTransaction();
     } catch (error) {
       await queryRunner.rollbackTransaction();

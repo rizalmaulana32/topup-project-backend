@@ -7,7 +7,10 @@ import {
 
 export enum ManualTopupSendStatus {
   SUCCESS = 'success',
+  /** Provider definitely refused - nothing sent, budget refunded. */
   FAILED = 'failed',
+  /** In flight, or timed out / errored with no clear answer - coin may or may not have arrived; the schedule is paused for a manual check. */
+  UNKNOWN = 'unknown',
 }
 
 /** One actual provider send attempt for a ManualTopup (one row per installment, including the immediate first one). */
