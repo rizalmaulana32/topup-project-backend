@@ -17,6 +17,7 @@ import {
   IsNull,
   LessThan,
   LessThanOrEqual,
+  MoreThan,
   Repository,
 } from 'typeorm';
 import { AffiliatesService } from '../affiliates/affiliates.service';
@@ -52,6 +53,20 @@ export const MIN_INTERVAL_SECONDS = 5;
 const STALE_LOCK_SECONDS = 300;
 /** Retry delay after a failed provider call for one-off sends (no interval of their own). */
 const ONE_OFF_RETRY_SECONDS = 60;
+/**
+ * createManualTopup rejects a second request for the same admin/momo
+ * user/amount within this window as a likely duplicate submission (client
+ * report 2026-11-14, Ricky: two manual top-ups for the same user, same
+ * nominal, same instant - "keki validasi setiap topup gak oleh ngirim maneh
+ * dengan nominal karo waktu seng podo"). This is separate from, and in
+ * addition to, processDueInstallments's per-row lock (d4d8057): that lock
+ * only stops the SAME row being sent twice, but a duplicate *request* (a
+ * double-tap, a retried network call) creates two distinct rows, each of
+ * which the lock then correctly sends exactly once - two real sends
+ * either way. Tight enough (seconds, not minutes) that a deliberate repeat
+ * top-up to the same user later the same day is never blocked.
+ */
+const DUPLICATE_CREATE_WINDOW_SECONDS = 10;
 
 /** Commission-log transaction_id of one manual send; super-affiliate month volumes build the same key in SQL. */
 export const manualTopupSendKey = (manualTopupId: string, sendId: string) =>
@@ -346,6 +361,23 @@ export class ManualTopupService {
     ) {
       throw new BadRequestException(
         `referral_code ${params.referralCode} is not an active affiliate code`,
+      );
+    }
+
+    const recentDuplicate = await this.manualTopupRepository.findOne({
+      where: {
+        createdBy: params.createdBy,
+        momoUserId: params.momoUserId,
+        totalAmount: params.totalAmount.toFixed(2),
+        createdAt: MoreThan(
+          new Date(Date.now() - DUPLICATE_CREATE_WINDOW_SECONDS * 1000),
+        ),
+      },
+      order: { createdAt: 'DESC' },
+    });
+    if (recentDuplicate) {
+      throw new ConflictException(
+        `A manual top-up for ${params.momoUserId} with the same amount (${params.totalAmount}) was already created ${recentDuplicate.id} moments ago - this looks like a duplicate submission, not a new one. Wait a few seconds and retry if this is really a separate top-up.`,
       );
     }
 

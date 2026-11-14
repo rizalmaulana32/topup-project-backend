@@ -21,6 +21,7 @@ describe('ManualTopupService', () => {
   let profileExistsMock: jest.Mock;
   let profileFindOneMock: jest.Mock;
   let manualTopupFindOneByMock: jest.Mock;
+  let manualTopupFindOneMock: jest.Mock;
   let manualTopupSaveMock: jest.Mock;
   let manualTopupCreateMock: jest.Mock;
   let manualTopupFindMock: jest.Mock;
@@ -41,6 +42,7 @@ describe('ManualTopupService', () => {
     profileExistsMock = jest.fn().mockResolvedValue(false);
     profileFindOneMock = jest.fn().mockResolvedValue(null);
     manualTopupFindOneByMock = jest.fn();
+    manualTopupFindOneMock = jest.fn().mockResolvedValue(null);
     manualTopupFindMock = jest.fn().mockResolvedValue([]);
     manualTopupUpdateMock = jest.fn().mockResolvedValue(undefined);
     claimExecuteMock = jest.fn().mockResolvedValue({ affected: 1 });
@@ -68,6 +70,7 @@ describe('ManualTopupService', () => {
         Promise.resolve({ id: where.id }),
       ),
       findOneBy: manualTopupFindOneByMock,
+      findOne: manualTopupFindOneMock,
       find: manualTopupFindMock,
       createQueryBuilder: () => claimQb,
     } as unknown as Repository<ManualTopup>;
@@ -219,6 +222,47 @@ describe('ManualTopupService', () => {
 
       const saved = manualTopupSaveMock.mock.calls[0][0];
       expect(saved.customerName).toBe('Player_12345');
+    });
+
+    it('rejects a second create for the same admin/momo user/amount within the duplicate window, before ever touching the provider (2026-11-14 client report: the same nominal sent to the same user twice at the same instant)', async () => {
+      manualTopupFindOneMock.mockResolvedValue({
+        id: 'MTU-EARLIER',
+        createdAt: new Date(Date.now() - 2000),
+      });
+
+      await expect(
+        service.createManualTopup({
+          momoUserId: '12345',
+          totalAmount: 10000,
+          createdBy: '1',
+        }),
+      ).rejects.toBeInstanceOf(ConflictException);
+      expect(checkIdMock).not.toHaveBeenCalled();
+      expect(manualTopupSaveMock).not.toHaveBeenCalled();
+      expect(injectCoinMock).not.toHaveBeenCalled();
+    });
+
+    it('allows a new create once no matching recent duplicate is found', async () => {
+      manualTopupFindOneMock.mockResolvedValue(null);
+      checkIdMock.mockResolvedValue({ username: 'Player_12345', avatarUrl: null });
+      injectCoinMock.mockResolvedValue({ success: true, response: '{}' });
+
+      await expect(
+        service.createManualTopup({
+          momoUserId: '12345',
+          totalAmount: 10000,
+          createdBy: '1',
+        }),
+      ).resolves.toBeDefined();
+      expect(manualTopupFindOneMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            createdBy: '1',
+            momoUserId: '12345',
+            totalAmount: '10000.00',
+          }),
+        }),
+      );
     });
   });
 
