@@ -1,5 +1,10 @@
-import { BadRequestException, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  NotFoundException,
+} from '@nestjs/common';
 import type { ProviderTopUpPort } from '../provider/provider-top-up.port';
+import { CoinSendGuard } from '../provider/coin-send-guard.service';
 import { AffiliatesService } from '../affiliates/affiliates.service';
 import { BonusTiersService } from '../bonus-tiers/bonus-tiers.service';
 import { SuperAffiliatesService } from '../super-affiliates/super-affiliates.service';
@@ -51,6 +56,7 @@ describe('TopupService', () => {
   let settingsService: jest.Mocked<Pick<SettingsService, 'get'>>;
   let bonusTiersService: jest.Mocked<Pick<BonusTiersService, 'findAll'>>;
   let creditSuperAffiliateMock: jest.Mock;
+  let hasRecentSendMock: jest.Mock;
   let service: TopupService;
 
   const product = {
@@ -109,6 +115,7 @@ describe('TopupService', () => {
     };
 
     creditSuperAffiliateMock = jest.fn().mockResolvedValue('0.00');
+    hasRecentSendMock = jest.fn().mockResolvedValue(false);
 
     // Same as the migration seed.
     bonusTiersService = {
@@ -139,6 +146,7 @@ describe('TopupService', () => {
       {
         creditCommissionForTransaction: creditSuperAffiliateMock,
       } as unknown as SuperAffiliatesService,
+      { hasRecentSend: hasRecentSendMock } as unknown as CoinSendGuard,
     );
   });
 
@@ -330,6 +338,17 @@ describe('TopupService', () => {
   });
 
   describe('checkoutCustomAmount', () => {
+    it('refuses checkout when the same coin amount was just sent to that ID', async () => {
+      hasRecentSendMock.mockResolvedValue(true);
+
+      await expect(
+        service.checkoutCustomAmount({ amount: 25000, target_user_id: '1' }),
+      ).rejects.toBeInstanceOf(ConflictException);
+      expect(hasRecentSendMock).toHaveBeenCalledWith('1', 25175);
+      expect(
+        transactionsService.createPendingCustomAmount,
+      ).not.toHaveBeenCalled();
+    });
     it('pays out 1:1 (no bonus, no cut) below the lowest published tier, creates a pending transaction, and requests a LinkQu payment link for the full nominal amount', async () => {
       transactionsService.createPendingCustomAmount.mockResolvedValue({
         id: 'TRX-20260805-0020',

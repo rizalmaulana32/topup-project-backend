@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   Inject,
   Injectable,
   Logger,
@@ -7,6 +8,10 @@ import {
 } from '@nestjs/common';
 import { PROVIDER_TOP_UP_PORT } from '../provider/provider-top-up.port';
 import type { ProviderTopUpPort } from '../provider/provider-top-up.port';
+import {
+  CoinSendGuard,
+  DUPLICATE_SEND_WINDOW_MINUTES,
+} from '../provider/coin-send-guard.service';
 import { AffiliatesService } from '../affiliates/affiliates.service';
 import { BonusTiersService } from '../bonus-tiers/bonus-tiers.service';
 import { PlatformService } from '../platform/platform.service';
@@ -39,6 +44,7 @@ export class TopupService {
     private readonly settingsService: SettingsService,
     private readonly bonusTiersService: BonusTiersService,
     private readonly superAffiliatesService: SuperAffiliatesService,
+    private readonly coinSendGuard: CoinSendGuard,
   ) {}
 
   /**
@@ -188,6 +194,15 @@ export class TopupService {
       );
     }
 
+    // Stop the customer before paying - once paid, a duplicate is only held.
+    if (
+      await this.coinSendGuard.hasRecentSend(dto.target_user_id, coinAmount)
+    ) {
+      throw new ConflictException(
+        `${coinAmount} coin was just sent to ${dto.target_user_id}; try again in ${DUPLICATE_SEND_WINDOW_MINUTES} minutes`,
+      );
+    }
+
     const transaction =
       await this.transactionsService.createPendingCustomAmount({
         grossAmount: dto.amount.toFixed(2),
@@ -283,6 +298,12 @@ export class TopupService {
       success: injectResult.success,
       response: injectResult.response,
     });
+
+    if (injectResult.duplicate) {
+      this.logger.error(
+        `Transaction ${transaction.id} is paid but its coin send was held as a duplicate - check MomoLive before sending manually: ${injectResult.response}`,
+      );
+    }
 
     if (injectResult.success) {
       const affiliateCommission = transaction.referralCode

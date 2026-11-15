@@ -23,7 +23,7 @@ import {
   priceWithdrawal,
   sendMomoCoinPayout,
 } from '../affiliates/withdrawal.util';
-import { generateOrderId } from '../common/utils/id-generator.util';
+import { insertWithOrderId } from '../common/utils/id-generator.util';
 import {
   assertReferralCodeAvailable,
   generateUniqueReferralCode,
@@ -569,9 +569,11 @@ export class SuperAffiliatesService {
       await manager.update(SuperAffiliateProfile, profile.id, {
         commissionBalance: newBalance.toFixed(2),
       });
-      const withdrawal = await manager.save(
-        manager.create(SuperAffiliateWithdrawal, {
-          id: generateOrderId('SWD'),
+      const withdrawal = await insertWithOrderId(
+        manager,
+        SuperAffiliateWithdrawal,
+        'SWD',
+        {
           superAffiliateProfileId: profile.id,
           amount: amount.toFixed(2),
           adminFee: adminFee.toFixed(2),
@@ -582,7 +584,7 @@ export class SuperAffiliatesService {
           accountNumber: isCoin ? null : profile.accountNumber,
           accountHolder: isCoin ? null : profile.accountHolder,
           status: WithdrawalStatus.PENDING,
-        }),
+        },
       );
       await manager.save(
         manager.create(SuperAffiliateCommissionLog, {

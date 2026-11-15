@@ -22,7 +22,7 @@ import {
 } from 'typeorm';
 import { AffiliatesService } from '../affiliates/affiliates.service';
 import { AffiliatorProfile } from '../affiliates/entities/affiliator-profile.entity';
-import { generateOrderId } from '../common/utils/id-generator.util';
+import { insertWithOrderId } from '../common/utils/id-generator.util';
 import {
   assertReferralCodeAvailable,
   generateUniqueReferralCode,
@@ -408,9 +408,11 @@ export class ManualTopupService {
 
     // Born locked, so nothing else can send it while the first send runs.
     const lockedAt = new Date();
-    const manualTopup = await this.manualTopupRepository.save(
-      this.manualTopupRepository.create({
-        id: generateOrderId('MTU'),
+    const manualTopup = await insertWithOrderId(
+      this.manualTopupRepository.manager,
+      ManualTopup,
+      'MTU',
+      {
         momoUserId: params.momoUserId,
         customerName: params.customerName ?? check.username,
         totalAmount: params.totalAmount.toFixed(2),
@@ -424,7 +426,7 @@ export class ManualTopupService {
         nextRunAt: null,
         lockedAt,
         createdBy: params.createdBy,
-      }),
+      },
     );
 
     await this.sendLocked(manualTopup, lockedAt);
@@ -794,6 +796,8 @@ export class ManualTopupService {
         productProviderCode: MANUAL_TOPUP_GAME_CODE,
         targetUserId: manualTopup.momoUserId,
         coin: amount,
+        // Later installments of this same schedule repeat the amount on purpose.
+        allowRepeat: Number(manualTopup.amountSent) > 0,
       });
     } catch (error) {
       result = {
@@ -845,6 +849,14 @@ export class ManualTopupService {
             amount,
           );
         }
+        if (result.duplicate) {
+          // Retrying would just send it once the window passes - cancel.
+          await manager.update(ManualTopup, onlyIfActive, {
+            status: ManualTopupStatus.CANCELLED,
+            nextRunAt: null,
+          });
+          return;
+        }
         const retrySeconds =
           manualTopup.intervalSeconds ?? ONE_OFF_RETRY_SECONDS;
         await manager.update(ManualTopup, onlyIfActive, {
@@ -882,6 +894,10 @@ export class ManualTopupService {
         });
       }
     });
+
+    if (result.duplicate) {
+      throw new ConflictException(result.response);
+    }
 
     if (sendStatus === ManualTopupSendStatus.UNKNOWN) {
       this.logger.error(

@@ -10,12 +10,16 @@ export interface InjectCoinParams {
   targetUserId: string;
   targetZoneId?: string | null;
   coin: number;
+  /** Skip the duplicate-send guard - only for later installments of one manual schedule. */
+  allowRepeat?: boolean;
 }
 
 export interface InjectCoinResult {
   success: boolean;
   /** true only when the provider definitely refused, i.e. no coins were sent. A failure without it has an unknown outcome. */
   rejected?: boolean;
+  /** Blocked by CoinSendGuard (same ID + amount sent recently); implies rejected. */
+  duplicate?: boolean;
   response: string;
 }
 

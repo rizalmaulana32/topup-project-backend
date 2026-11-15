@@ -10,7 +10,7 @@ import {
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
 import * as bcrypt from 'bcrypt';
 import { DataSource, In, Repository } from 'typeorm';
-import { generateOrderId } from '../common/utils/id-generator.util';
+import { insertWithOrderId } from '../common/utils/id-generator.util';
 import {
   assertReferralCodeAvailable,
   generateUniqueReferralCode,
@@ -887,20 +887,23 @@ export class AffiliatesService {
         commissionBalance: newBalance.toFixed(2),
       });
 
-      const withdrawal = queryRunner.manager.create(CommissionWithdrawal, {
-        id: generateOrderId('WDW'),
-        affiliatorId: profile.id,
-        amount: amount.toFixed(2),
-        adminFee: adminFee.toFixed(2),
-        netAmount: netAmount.toFixed(2),
-        method: payout.method,
-        momoUserId: isCoin ? payout.momoUserId : null,
-        bankName: isCoin ? null : profile.bankName,
-        accountNumber: isCoin ? null : profile.accountNumber,
-        accountHolder: isCoin ? null : profile.accountHolder,
-        status: WithdrawalStatus.PENDING,
-      });
-      await queryRunner.manager.save(withdrawal);
+      const withdrawal = await insertWithOrderId(
+        queryRunner.manager,
+        CommissionWithdrawal,
+        'WDW',
+        {
+          affiliatorId: profile.id,
+          amount: amount.toFixed(2),
+          adminFee: adminFee.toFixed(2),
+          netAmount: netAmount.toFixed(2),
+          method: payout.method,
+          momoUserId: isCoin ? payout.momoUserId : null,
+          bankName: isCoin ? null : profile.bankName,
+          accountNumber: isCoin ? null : profile.accountNumber,
+          accountHolder: isCoin ? null : profile.accountHolder,
+          status: WithdrawalStatus.PENDING,
+        },
+      );
 
       const log = queryRunner.manager.create(CommissionLog, {
         affiliatorId: profile.id,

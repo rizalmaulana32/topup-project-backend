@@ -7,7 +7,7 @@ import {
 } from '@nestjs/common';
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Repository } from 'typeorm';
-import { generateOrderId } from '../common/utils/id-generator.util';
+import { insertWithOrderId } from '../common/utils/id-generator.util';
 import { LinkQuService } from '../linkqu/linkqu.service';
 import { PlatformSettings } from '../settings/entities/platform-settings.entity';
 import {
@@ -168,15 +168,18 @@ export class PlatformService {
         platformBalance: newBalance.toFixed(2),
       });
 
-      const withdrawal = queryRunner.manager.create(PlatformWithdrawal, {
-        id: generateOrderId('PWD'),
-        amount: amount.toFixed(2),
-        bankName: settings.adminBankName,
-        accountNumber: settings.adminAccountNumber,
-        accountHolder: settings.adminAccountHolder,
-        status: PlatformWithdrawalStatus.PENDING,
-      });
-      await queryRunner.manager.save(withdrawal);
+      const withdrawal = await insertWithOrderId(
+        queryRunner.manager,
+        PlatformWithdrawal,
+        'PWD',
+        {
+          amount: amount.toFixed(2),
+          bankName: settings.adminBankName,
+          accountNumber: settings.adminAccountNumber,
+          accountHolder: settings.adminAccountHolder,
+          status: PlatformWithdrawalStatus.PENDING,
+        },
+      );
 
       const log = queryRunner.manager.create(PlatformRevenueLog, {
         withdrawalId: withdrawal.id,

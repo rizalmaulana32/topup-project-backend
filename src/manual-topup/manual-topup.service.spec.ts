@@ -62,7 +62,28 @@ describe('ManualTopupService', () => {
       exists: profileExistsMock,
       findOne: profileFindOneMock,
     } as unknown as Repository<AdminProfile>;
+    // insertWithOrderId's INSERT ... ON CONFLICT DO NOTHING, routed into
+    // manualTopupSaveMock so tests can keep asserting on the inserted values.
+    let inserted: unknown;
+    const insertQb = {
+      insert: () => insertQb,
+      into: () => insertQb,
+      values: (values: unknown) => {
+        inserted = values;
+        return insertQb;
+      },
+      orIgnore: () => insertQb,
+      returning: () => insertQb,
+      execute: async () => {
+        inserted = await manualTopupSaveMock(inserted);
+        return { raw: [inserted] };
+      },
+    };
     const manualTopupRepository = {
+      manager: {
+        createQueryBuilder: () => insertQb,
+        findOneByOrFail: () => Promise.resolve(inserted),
+      },
       create: manualTopupCreateMock,
       save: manualTopupSaveMock,
       update: manualTopupUpdateMock,
@@ -244,7 +265,10 @@ describe('ManualTopupService', () => {
 
     it('allows a new create once no matching recent duplicate is found', async () => {
       manualTopupFindOneMock.mockResolvedValue(null);
-      checkIdMock.mockResolvedValue({ username: 'Player_12345', avatarUrl: null });
+      checkIdMock.mockResolvedValue({
+        username: 'Player_12345',
+        avatarUrl: null,
+      });
       injectCoinMock.mockResolvedValue({ success: true, response: '{}' });
 
       await expect(
@@ -459,6 +483,24 @@ describe('ManualTopupService', () => {
       );
       expect(updatesFor('status')).toHaveLength(0);
       expect(updatesFor('nextRunAt')).toHaveLength(1);
+      expect(updatesFor('amountSent')).toHaveLength(0);
+    });
+
+    it('cancels instead of retrying when the send was blocked as a duplicate', async () => {
+      mockDue();
+      manualTopupFindOneByMock.mockResolvedValue(dueTopup);
+      injectCoinMock.mockResolvedValue({
+        success: false,
+        rejected: true,
+        duplicate: true,
+        response: 'Blocked duplicate send',
+      });
+
+      await service.processDueInstallments();
+
+      expect(updatesFor('status').map(([, changes]) => changes.status)).toEqual(
+        [ManualTopupStatus.CANCELLED],
+      );
       expect(updatesFor('amountSent')).toHaveLength(0);
     });
 

@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   Body,
+  ConflictException,
   Controller,
   Delete,
   ForbiddenException,
@@ -912,6 +913,9 @@ export class AdminController {
       targetZoneId: dto.target_zone_id,
       coin: dto.coin,
     });
+    if (result.duplicate) {
+      throw new ConflictException(result.response);
+    }
 
     return {
       success: result.success,

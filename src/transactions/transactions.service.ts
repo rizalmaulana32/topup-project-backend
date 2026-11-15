@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, IsNull, Not, Repository } from 'typeorm';
-import { generateOrderId } from '../common/utils/id-generator.util';
+import { insertWithOrderId } from '../common/utils/id-generator.util';
 import {
   PaymentStatus,
   ProviderStatus,
@@ -28,21 +28,23 @@ export class TransactionsService {
   async createPendingCustomAmount(
     params: CreatePendingCustomAmountTransactionParams,
   ): Promise<Transaction> {
-    const transaction = this.transactionRepository.create({
-      id: generateOrderId('TRX'),
-      productId: null,
-      targetUserId: params.targetUserId,
-      targetZoneId: params.targetZoneId ?? null,
-      referralCode: params.referralCode ?? null,
-      grossAmount: params.grossAmount,
-      coinAmount: params.coinAmount,
-      costBasis: params.costBasis,
-      bonusCoin: params.bonusCoin,
-      paymentStatus: PaymentStatus.PENDING,
-      providerStatus: ProviderStatus.PENDING,
-    });
-
-    return this.transactionRepository.save(transaction);
+    return insertWithOrderId(
+      this.transactionRepository.manager,
+      Transaction,
+      'TRX',
+      {
+        productId: null,
+        targetUserId: params.targetUserId,
+        targetZoneId: params.targetZoneId ?? null,
+        referralCode: params.referralCode ?? null,
+        grossAmount: params.grossAmount,
+        coinAmount: params.coinAmount,
+        costBasis: params.costBasis,
+        bonusCoin: params.bonusCoin,
+        paymentStatus: PaymentStatus.PENDING,
+        providerStatus: ProviderStatus.PENDING,
+      },
+    );
   }
 
   async attachLinkQuReference(
