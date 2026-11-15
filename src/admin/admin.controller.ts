@@ -645,7 +645,7 @@ export class AdminController {
   @Post('withdrawals/:id/approve')
   @ApiOperation({
     summary:
-      'Approve a withdrawal request (pending -> approved). Nothing is sent here; use /process afterward. bank: transfer manually, then /process marks it paid. momo_coin: /process sends the coins.',
+      'Approve a withdrawal request (pending -> approved). Nothing is sent here; use /process afterward. Transfer the funds / send the Momo coins manually, then /process marks it paid.',
   })
   async approveWithdrawal(
     @Param('id') id: string,
@@ -671,7 +671,7 @@ export class AdminController {
   @Post('withdrawals/:id/process')
   @ApiOperation({
     summary:
-      'Mark an approved withdrawal as paid. bank: after the admin has manually transferred the funds. momo_coin: sends the coins now (back to approved if MomoLive refuses; stays paid with an UNVERIFIED note if the outcome is unknown).',
+      'Mark an approved withdrawal as paid, once only (409 after). For both bank and momo_coin the admin pays out manually first (bank transfer / MomoLive); nothing is sent from here.',
   })
   async processWithdrawal(
     @Param('id') id: string,

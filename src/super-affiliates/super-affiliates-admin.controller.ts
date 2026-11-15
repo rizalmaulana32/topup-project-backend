@@ -152,7 +152,7 @@ export class SuperAffiliatesAdminController {
   @Post('super-affiliate-withdrawals/:id/process')
   @ApiOperation({
     summary:
-      'approved -> paid. bank: after the manual transfer. momo_coin: sends the coins now.',
+      'approved -> paid, once only (409 after). bank and momo_coin are both paid out manually by the admin first; nothing is sent from here.',
   })
   async processWithdrawal(
     @Param('id') id: string,

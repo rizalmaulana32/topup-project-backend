@@ -40,11 +40,7 @@ import {
   WithdrawalMethod,
   WithdrawalStatus,
 } from './entities/commission-withdrawal.entity';
-import {
-  assertMomoIdExists,
-  priceWithdrawal,
-  sendMomoCoinPayout,
-} from './withdrawal.util';
+import { assertMomoIdExists, priceWithdrawal } from './withdrawal.util';
 
 const BCRYPT_SALT_ROUNDS = 10;
 
@@ -980,12 +976,12 @@ export class AffiliatesService {
    * bank: the admin has already transferred the funds manually (see
    * approveWithdrawal's doc comment for why).
    *
-   * momo_coin: this is where net_amount coins are sent. The row is claimed
-   * APPROVED -> PAID before sending, so a double click or retry can never
-   * send twice. If MomoLive definitely refused (nothing sent) it goes back to
-   * APPROVED for a retry. If the outcome is unknown (network error, timeout,
-   * non-JSON reply) it stays PAID with a note: the coins may have arrived,
-   * and re-sending is how WDW duplicates happened before (2026-11-07).
+   * momo_coin: same - the admin sends the coins manually in MomoLive (client
+   * 2026-11-15: "nanti akan dikirim manual"); nothing is sent from here.
+   *
+   * Conditional APPROVED -> PAID update, so it succeeds exactly once: a double
+   * click, retry or concurrent call gets 409 (client 2026-11-15: "validasi
+   * hanya 1 kali").
    */
   async markWithdrawalProcessed(
     withdrawalId: string,
@@ -993,41 +989,21 @@ export class AffiliatesService {
     notes?: string,
   ): Promise<CommissionWithdrawal> {
     const withdrawal = await this.findWithdrawalByIdOrFail(withdrawalId);
-
-    if (withdrawal.method === WithdrawalMethod.MOMO_COIN) {
-      return this.sendMomoCoinWithdrawal(withdrawal, adminUserId, notes);
-    }
-
-    if (withdrawal.status !== WithdrawalStatus.APPROVED) {
+    const claimed = await this.withdrawalRepository.update(
+      { id: withdrawalId, status: WithdrawalStatus.APPROVED },
+      {
+        status: WithdrawalStatus.PAID,
+        processedBy: adminUserId,
+        processedAt: new Date(),
+        ...(notes && { adminNotes: notes }),
+      },
+    );
+    if (!claimed.affected) {
       throw new ConflictException(
         `Withdrawal ${withdrawalId} is not approved (current status: ${withdrawal.status})`,
       );
     }
-
-    withdrawal.status = WithdrawalStatus.PAID;
-    withdrawal.processedBy = adminUserId;
-    withdrawal.processedAt = new Date();
-    if (notes) {
-      withdrawal.adminNotes = notes;
-    }
-    return this.withdrawalRepository.save(withdrawal);
-  }
-
-  private async sendMomoCoinWithdrawal(
-    withdrawal: CommissionWithdrawal,
-    adminUserId: string,
-    notes?: string,
-  ): Promise<CommissionWithdrawal> {
-    await sendMomoCoinPayout(
-      this.withdrawalRepository,
-      this.provider,
-      this.logger,
-      withdrawal,
-      adminUserId,
-      notes,
-      'AFFILIATE_WITHDRAWAL',
-    );
-    return this.findWithdrawalByIdOrFail(withdrawal.id);
+    return this.findWithdrawalByIdOrFail(withdrawalId);
   }
 
   /**

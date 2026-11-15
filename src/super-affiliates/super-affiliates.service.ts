@@ -4,7 +4,6 @@ import {
   ForbiddenException,
   Inject,
   Injectable,
-  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
@@ -21,7 +20,6 @@ import { currentPeriodKey } from '../affiliates/tiered-commission.util';
 import {
   assertMomoIdExists,
   priceWithdrawal,
-  sendMomoCoinPayout,
 } from '../affiliates/withdrawal.util';
 import { insertWithOrderId } from '../common/utils/id-generator.util';
 import {
@@ -59,8 +57,6 @@ export interface SuperAffiliateRuleChanges {
 
 @Injectable()
 export class SuperAffiliatesService {
-  private readonly logger = new Logger(SuperAffiliatesService.name);
-
   constructor(
     @InjectRepository(SuperAffiliateProfile)
     private readonly profileRepository: Repository<SuperAffiliateProfile>,
@@ -676,26 +672,13 @@ export class SuperAffiliatesService {
     return toWithdrawalItem(await this.findWithdrawalOrFail(id));
   }
 
-  /** approved -> paid. bank: after the manual transfer. momo_coin: sends the coins now. */
+  /** approved -> paid, exactly once (409 after). bank and momo_coin are both paid out manually by the admin; nothing is sent from here. */
   async markWithdrawalProcessed(
     id: string,
     adminUserId: string,
     notes?: string,
   ) {
     const withdrawal = await this.findWithdrawalOrFail(id);
-    if (withdrawal.method === WithdrawalMethod.MOMO_COIN) {
-      await sendMomoCoinPayout(
-        this.withdrawalRepository,
-        this.provider,
-        this.logger,
-        withdrawal,
-        adminUserId,
-        notes,
-        'SUPER_AFFILIATE_WITHDRAWAL',
-      );
-      return toWithdrawalItem(await this.findWithdrawalOrFail(id));
-    }
-
     const claimed = await this.withdrawalRepository.update(
       { id, status: WithdrawalStatus.APPROVED },
       {

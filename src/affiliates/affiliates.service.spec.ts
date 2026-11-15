@@ -1,5 +1,4 @@
 import {
-  BadGatewayException,
   BadRequestException,
   ConflictException,
   ForbiddenException,
@@ -811,7 +810,7 @@ describe('AffiliatesService', () => {
     });
   });
 
-  describe('markWithdrawalProcessed for momo_coin', () => {
+  describe('markWithdrawalProcessed', () => {
     let row: Record<string, unknown>;
     beforeEach(() => {
       row = {
@@ -838,50 +837,43 @@ describe('AffiliatesService', () => {
       );
     });
 
-    it('sends net_amount coins once and marks it paid; a second call sends nothing', async () => {
-      injectCoinMock.mockResolvedValue({ success: true, response: 'ok' });
-
-      const result = await service.markWithdrawalProcessed('WDW-1', 'admin-1');
-
-      expect(injectCoinMock).toHaveBeenCalledWith(
-        expect.objectContaining({ targetUserId: '7100001', coin: 95000 }),
+    it('marks a momo_coin withdrawal paid without sending coins (sent manually), only once', async () => {
+      const result = await service.markWithdrawalProcessed(
+        'WDW-1',
+        'admin-1',
+        'Sent manually in MomoLive',
       );
+
+      expect(injectCoinMock).not.toHaveBeenCalled();
       expect(result.status).toBe(WithdrawalStatus.PAID);
       expect(result.processedBy).toBe('admin-1');
+      expect(result.processedAt).toBeInstanceOf(Date);
+      expect(result.adminNotes).toBe('Sent manually in MomoLive');
 
       await expect(
         service.markWithdrawalProcessed('WDW-1', 'admin-1'),
       ).rejects.toBeInstanceOf(ConflictException);
-      expect(injectCoinMock).toHaveBeenCalledTimes(1);
     });
 
-    it('goes back to approved when MomoLive definitely refused', async () => {
-      injectCoinMock.mockResolvedValue({
-        success: false,
-        rejected: true,
-        response: 'insufficient balance',
-      });
+    it('lets only one of two concurrent calls mark a bank withdrawal paid', async () => {
+      row.method = WithdrawalMethod.BANK;
 
-      await expect(
+      const results = await Promise.allSettled([
         service.markWithdrawalProcessed('WDW-1', 'admin-1'),
-      ).rejects.toBeInstanceOf(BadGatewayException);
-      expect(row.status).toBe(WithdrawalStatus.APPROVED);
-      expect(row.processedBy).toBeNull();
+        service.markWithdrawalProcessed('WDW-1', 'admin-2'),
+      ]);
+
+      expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+      expect(results.filter((r) => r.status === 'rejected')).toHaveLength(1);
     });
 
-    it('stays paid with an UNVERIFIED note when the outcome is unknown, so it cannot be re-sent', async () => {
-      injectCoinMock.mockRejectedValue(new Error('socket hang up'));
-
-      await expect(
-        service.markWithdrawalProcessed('WDW-1', 'admin-1'),
-      ).rejects.toBeInstanceOf(BadGatewayException);
-      expect(row.status).toBe(WithdrawalStatus.PAID);
-      expect(row.adminNotes).toContain('UNVERIFIED');
+    it('throws ConflictException when the withdrawal is not approved', async () => {
+      row.status = WithdrawalStatus.PENDING;
 
       await expect(
         service.markWithdrawalProcessed('WDW-1', 'admin-1'),
       ).rejects.toBeInstanceOf(ConflictException);
-      expect(injectCoinMock).toHaveBeenCalledTimes(1);
+      expect(row.status).toBe(WithdrawalStatus.PENDING);
     });
   });
 
@@ -895,38 +887,6 @@ describe('AffiliatesService', () => {
           momoUserId: '999',
         }),
       ).rejects.toBeInstanceOf(BadRequestException);
-    });
-  });
-
-  describe('markWithdrawalProcessed', () => {
-    it('moves an approved withdrawal to paid and records the admin note', async () => {
-      withdrawalFindOneMock.mockResolvedValue({
-        id: 'WDW-1',
-        status: WithdrawalStatus.APPROVED,
-      });
-
-      const result = await service.markWithdrawalProcessed(
-        'WDW-1',
-        'admin-1',
-        'Transferred manually, ref 123',
-      );
-
-      expect(result.status).toBe(WithdrawalStatus.PAID);
-      expect(result.processedBy).toBe('admin-1');
-      expect(result.processedAt).toBeInstanceOf(Date);
-      expect(result.adminNotes).toBe('Transferred manually, ref 123');
-    });
-
-    it('throws ConflictException when the withdrawal is not approved', async () => {
-      withdrawalFindOneMock.mockResolvedValue({
-        id: 'WDW-1',
-        status: WithdrawalStatus.PENDING,
-      });
-
-      await expect(
-        service.markWithdrawalProcessed('WDW-1', 'admin-1'),
-      ).rejects.toBeInstanceOf(ConflictException);
-      expect(withdrawalSaveMock).not.toHaveBeenCalled();
     });
   });
 
