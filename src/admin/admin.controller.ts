@@ -736,7 +736,7 @@ export class AdminController {
   @Get('transactions/export')
   @ApiOperation({
     summary:
-      'Download the successful (paid) transactions as an .xlsx file. Filters: date_from/date_to, referral_code, amount_min/amount_max, as in GET /transactions; status is always paid, and limit/offset are ignored (max 10000 rows, newest first). Built in memory per request, nothing is stored on the server.',
+      'Download the successful (paid) transactions as an .xlsx file. Filters: date_from/date_to, referral_code, target_user_id, amount_min/amount_max, as in GET /transactions; status is always paid, and limit/offset are ignored (max 10000 rows, newest first). Built in memory per request, nothing is stored on the server.',
   })
   async exportTransactions(
     @Query() query: ListTransactionsDto,
@@ -747,6 +747,7 @@ export class AdminController {
       dateFrom: query.date_from,
       dateTo: query.date_to,
       referralCode: query.referral_code,
+      targetUserId: query.target_user_id,
       amountMin: query.amount_min,
       amountMax: query.amount_max,
       limit: 10000,
@@ -786,15 +787,23 @@ export class AdminController {
       dateFrom: query.date_from,
       dateTo: query.date_to,
       referralCode: query.referral_code,
+      targetUserId: query.target_user_id,
       amountMin: query.amount_min,
       amountMax: query.amount_max,
       limit: query.limit ?? 20,
       offset: query.offset ?? 0,
     });
+    // Live MomoLive lookup per distinct ID on the page; null when it fails.
+    const momoUsers = await this.affiliatesService.lookupMomoUsers(
+      result.items.map((t) => t.targetUserId),
+    );
     return {
       success: true,
       data: {
-        items: result.items,
+        items: result.items.map((t) => ({
+          ...t,
+          targetUsername: momoUsers.get(t.targetUserId)?.username ?? null,
+        })),
         total: result.total,
         limit: query.limit ?? 20,
         offset: query.offset ?? 0,

@@ -52,6 +52,11 @@ export class ListTransactionsDto {
   @IsString()
   referral_code?: string;
 
+  // Momo user ID the coin went to, exact match.
+  @IsOptional()
+  @IsString()
+  target_user_id?: string;
+
   // "Jumlah Min (Rp)" - inclusive lower bound on gross_amount.
   @IsOptional()
   @Type(() => Number)

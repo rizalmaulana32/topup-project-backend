@@ -285,7 +285,7 @@ export class AffiliatesService {
    *   for withdrawal debits/refunds.
    */
   /** POST /topup/check-id per distinct Momo ID; a failed lookup maps to null. */
-  private async lookupMomoUsers(ids: Iterable<string>) {
+  async lookupMomoUsers(ids: Iterable<string>) {
     return new Map(
       await Promise.all(
         [...new Set(ids)].map(async (id) => {

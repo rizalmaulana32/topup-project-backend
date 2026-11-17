@@ -87,6 +87,7 @@ export class TransactionsService {
     dateFrom?: string;
     dateTo?: string;
     referralCode?: string;
+    targetUserId?: string;
     amountMin?: number;
     amountMax?: number;
     limit: number;
@@ -119,6 +120,11 @@ export class TransactionsService {
     if (params.referralCode) {
       query.andWhere('t.referral_code = :referralCode', {
         referralCode: params.referralCode,
+      });
+    }
+    if (params.targetUserId) {
+      query.andWhere('t.target_user_id = :targetUserId', {
+        targetUserId: params.targetUserId,
       });
     }
     if (params.amountMin !== undefined) {
