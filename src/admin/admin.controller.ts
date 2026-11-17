@@ -70,6 +70,7 @@ import { ListContactMessagesDto } from './dto/list-contact-messages.dto';
 import { ListPlatformWithdrawalsDto } from '../platform/dto/list-platform-withdrawals.dto';
 import { ListTransactionsDto } from './dto/list-transactions.dto';
 import { ListWithdrawalsDto } from './dto/list-withdrawals.dto';
+import { WITHDRAWAL_STATUS_FILTERS } from '../affiliates/withdrawal.util';
 import { MoveUplineDto } from './dto/move-upline.dto';
 import { PlatformWithdrawDto } from '../platform/dto/platform-withdraw.dto';
 import { ProcessWithdrawalDto } from './dto/process-withdrawal.dto';
@@ -588,16 +589,19 @@ export class AdminController {
   @Get('withdrawals/export')
   @ApiOperation({
     summary:
-      'Download the successful (paid) commission withdrawals as an .xlsx file. Filters: method and search, as in GET /withdrawals; status is always paid, and limit/offset are ignored (max 10000 rows, newest first). Built in memory per request, nothing is stored on the server.',
+      'Download the successful (paid) commission withdrawals as an .xlsx file. Filters: method, search, affiliator_id, date_from/date_to, as in GET /withdrawals; status is always paid, and limit/offset are ignored (max 10000 rows, newest first). Built in memory per request, nothing is stored on the server.',
   })
   async exportWithdrawals(
     @Query() query: ListWithdrawalsDto,
   ): Promise<StreamableFile> {
     const result = await this.affiliatesService.findAllWithdrawals({
       // Only successful withdrawals are exported (client request, 2026-11-07).
-      status: WithdrawalStatus.PAID,
+      statuses: [WithdrawalStatus.PAID],
       method: query.method,
       search: query.search,
+      affiliatorId: query.affiliator_id,
+      dateFrom: query.date_from,
+      dateTo: query.date_to,
       limit: 10000,
       offset: 0,
     });
@@ -620,12 +624,20 @@ export class AdminController {
   }
 
   @Get('withdrawals')
-  @ApiOperation({ summary: 'List commission withdrawal requests' })
+  @ApiOperation({
+    summary:
+      'List commission withdrawal requests. status is a tab: pending, processing (approved), success (paid), failed (failed + rejected). counts = per-tab totals with every other filter applied.',
+  })
   async listWithdrawals(@Query() query: ListWithdrawalsDto) {
     const result = await this.affiliatesService.findAllWithdrawals({
-      status: query.status,
+      statuses: query.status
+        ? WITHDRAWAL_STATUS_FILTERS[query.status]
+        : undefined,
       method: query.method,
       search: query.search,
+      affiliatorId: query.affiliator_id,
+      dateFrom: query.date_from,
+      dateTo: query.date_to,
       limit: query.limit ?? 20,
       offset: query.offset ?? 0,
     });
@@ -635,6 +647,7 @@ export class AdminController {
         items: result.items.map((withdrawal) =>
           toWithdrawalItem(withdrawal, result.momoUsers),
         ),
+        counts: result.counts,
         total: result.total,
         limit: query.limit ?? 20,
         offset: query.offset ?? 0,
@@ -832,10 +845,14 @@ export class AdminController {
   }
 
   @Get('contact-messages')
-  @ApiOperation({ summary: 'List support/partnership messages' })
+  @ApiOperation({
+    summary:
+      'List support/partnership messages. search = partial match on name, email, message. counts = per-status totals with search applied.',
+  })
   async listContactMessages(@Query() query: ListContactMessagesDto) {
     const result = await this.contactService.findAll({
       status: query.status,
+      search: query.search,
       limit: query.limit ?? 20,
       offset: query.offset ?? 0,
     });
@@ -843,6 +860,7 @@ export class AdminController {
       success: true,
       data: {
         items: result.items,
+        counts: result.counts,
         total: result.total,
         limit: query.limit ?? 20,
         offset: query.offset ?? 0,

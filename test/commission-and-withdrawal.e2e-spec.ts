@@ -459,6 +459,56 @@ describe('Commission crediting and withdrawal (e2e)', () => {
     ).toBe(true);
   });
 
+  it('filters withdrawals by tab group, search, affiliator and Jakarta date, with per-tab counts', async () => {
+    const get = async (qs: string) =>
+      (
+        (
+          await request(app.getHttpServer())
+            .get(`/api/v1/admin/withdrawals?${qs}`)
+            .set('Authorization', `Bearer ${superadminToken}`)
+            .expect(200)
+        ).body as {
+          data: {
+            items: { id: string; status: WithdrawalStatus }[];
+            total: number;
+            counts: Record<string, number>;
+          };
+        }
+      ).data;
+    const today = new Date().toLocaleDateString('sv-SE', {
+      timeZone: 'Asia/Jakarta',
+    });
+    const mine = await withdrawalRepository.find({
+      where: { affiliatorId: affiliateProfileId },
+    });
+
+    const failed = await get('status=failed');
+    expect(failed.items.length).toBeGreaterThan(0);
+    expect(
+      failed.items.every((w) =>
+        [WithdrawalStatus.FAILED, WithdrawalStatus.REJECTED].includes(w.status),
+      ),
+    ).toBe(true);
+
+    const all = await get('');
+    const { all: allCount, ...groups } = all.counts;
+    expect(allCount).toBe(all.total);
+    expect(Object.values(groups).reduce((a, b) => a + b, 0)).toBe(allCount);
+    // counts ignore the status filter itself.
+    expect(failed.counts).toEqual(all.counts);
+
+    const byAffiliator = await get(`affiliator_id=${affiliateProfileId}`);
+    expect(byAffiliator.total).toBe(mine.length);
+
+    const bySearch = await get(`search=${mine[0].accountNumber}`);
+    expect(bySearch.items.some((w) => w.id === mine[0].id)).toBe(true);
+
+    expect((await get(`date_from=${today}&date_to=${today}`)).total).toBe(
+      all.total,
+    );
+    expect((await get('date_to=2000-01-01')).total).toBe(0);
+  });
+
   it('rejects a withdrawal request and refunds the balance without contacting LinkQu', async () => {
     const requestResponse = await request(app.getHttpServer())
       .post('/api/v1/affiliate/withdraw')

@@ -163,6 +163,27 @@ describe('Contact (e2e)', () => {
     ).toBe(true);
   });
 
+  it('searches contact messages and returns per-status counts', async () => {
+    const response = await request(app.getHttpServer())
+      .get('/api/v1/admin/contact-messages?search=RESELLER')
+      .set('Authorization', `Bearer ${superadminToken}`)
+      .expect(200);
+    const body = response.body as {
+      data: {
+        items: { message: string }[];
+        total: number;
+        counts: { all: number; open: number; resolved: number };
+      };
+    };
+    expect(body.data.total).toBeGreaterThan(0);
+    expect(body.data.items.every((m) => /reseller/i.test(m.message))).toBe(
+      true,
+    );
+    expect(body.data.counts.all).toBe(
+      body.data.counts.open + body.data.counts.resolved,
+    );
+  });
+
   it('returns 404 when resolving an unknown contact message', async () => {
     await request(app.getHttpServer())
       .post('/api/v1/admin/contact-messages/999999/resolve')

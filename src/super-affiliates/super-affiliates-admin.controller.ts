@@ -24,6 +24,7 @@ import { CreateSuperAffiliateDto } from './dto/create-super-affiliate.dto';
 import { ListSuperAffiliateWithdrawalsDto } from './dto/list-super-affiliate-withdrawals.dto';
 import { UpdateSuperAffiliateDto } from './dto/update-super-affiliate.dto';
 import { SuperAffiliatesService } from './super-affiliates.service';
+import { WITHDRAWAL_STATUS_FILTERS } from '../affiliates/withdrawal.util';
 
 type AuthedRequest = Request & { user: AuthenticatedUser };
 
@@ -130,7 +131,9 @@ export class SuperAffiliatesAdminController {
   @Get('super-affiliate-withdrawals')
   async listWithdrawals(@Query() query: ListSuperAffiliateWithdrawalsDto) {
     const data = await this.service.findAllWithdrawals({
-      status: query.status,
+      statuses: query.status
+        ? WITHDRAWAL_STATUS_FILTERS[query.status]
+        : undefined,
       method: query.method,
       superAffiliateId: query.super_affiliate_id,
       search: query.search,

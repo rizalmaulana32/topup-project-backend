@@ -2,6 +2,7 @@ import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
+import { countByGroups } from '../common/utils/list-query.util';
 import { EmailService } from '../email/email.service';
 import { CreateContactMessageDto } from './dto/create-contact-message.dto';
 import {
@@ -11,6 +12,7 @@ import {
 
 interface FindAllParams {
   status?: ContactMessageStatus;
+  search?: string;
   limit: number;
   offset: number;
 }
@@ -53,16 +55,27 @@ export class ContactService {
     return saved;
   }
 
-  async findAll(
-    params: FindAllParams,
-  ): Promise<{ items: ContactMessage[]; total: number }> {
-    const [items, total] = await this.contactMessageRepository.findAndCount({
-      where: params.status ? { status: params.status } : {},
-      order: { createdAt: 'DESC' },
-      take: params.limit,
-      skip: params.offset,
+  async findAll(params: FindAllParams) {
+    const qb = this.contactMessageRepository.createQueryBuilder('m');
+    if (params.search) {
+      qb.andWhere(
+        '(m.name ILIKE :search OR m.email ILIKE :search OR m.message ILIKE :search)',
+        { search: `%${params.search}%` },
+      );
+    }
+    const counts = await countByGroups(qb, 'm.status', {
+      open: [ContactMessageStatus.OPEN],
+      resolved: [ContactMessageStatus.RESOLVED],
     });
-    return { items, total };
+    if (params.status) {
+      qb.andWhere('m.status = :status', { status: params.status });
+    }
+    const [items, total] = await qb
+      .orderBy('m.createdAt', 'DESC')
+      .take(params.limit)
+      .skip(params.offset)
+      .getManyAndCount();
+    return { items, total, counts };
   }
 
   async markResolved(id: string): Promise<ContactMessage> {

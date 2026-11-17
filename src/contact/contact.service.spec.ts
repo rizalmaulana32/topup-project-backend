@@ -119,24 +119,4 @@ describe('ContactService', () => {
       expect(softDeleteMock).not.toHaveBeenCalled();
     });
   });
-
-  describe('findAll', () => {
-    it('paginates and optionally filters by status', async () => {
-      findAndCountMock.mockResolvedValue([[], 0]);
-
-      await service.findAll({
-        status: ContactMessageStatus.OPEN,
-        limit: 20,
-        offset: 0,
-      });
-
-      expect(findAndCountMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          where: { status: ContactMessageStatus.OPEN },
-          take: 20,
-          skip: 0,
-        }),
-      );
-    });
-  });
 });

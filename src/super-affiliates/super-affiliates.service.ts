@@ -609,7 +609,7 @@ export class SuperAffiliatesService {
   }
 
   async findAllWithdrawals(params: {
-    status?: WithdrawalStatus;
+    statuses?: WithdrawalStatus[];
     method?: WithdrawalMethod;
     superAffiliateId?: string;
     search?: string;
@@ -624,8 +624,10 @@ export class SuperAffiliatesService {
       .orderBy('withdrawal.createdAt', 'DESC')
       .take(params.limit)
       .skip(params.offset);
-    if (params.status) {
-      qb.andWhere('withdrawal.status = :status', { status: params.status });
+    if (params.statuses) {
+      qb.andWhere('withdrawal.status IN (:...statuses)', {
+        statuses: params.statuses,
+      });
     }
     if (params.method) {
       qb.andWhere('withdrawal.method = :method', { method: params.method });

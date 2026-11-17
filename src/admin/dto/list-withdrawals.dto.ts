@@ -1,37 +1,48 @@
-import { Transform, Type } from 'class-transformer';
-import { IsEnum, IsInt, IsOptional, IsString, Max, Min } from 'class-validator';
+import { Type } from 'class-transformer';
 import {
-  WithdrawalMethod,
-  WithdrawalStatus,
-} from '../../affiliates/entities/commission-withdrawal.entity';
-
-// The frontend's withdrawal tabs (Semua / Pending / Approval / Success /
-// Failed) use their own tab names, not always the stored enum value - these
-// aliases let the frontend pass its tab name straight through as `status`.
-const STATUS_ALIASES: Record<string, WithdrawalStatus> = {
-  success: WithdrawalStatus.PAID,
-  approval: WithdrawalStatus.APPROVED,
-  failed: WithdrawalStatus.REJECTED,
-};
+  IsDateString,
+  IsEnum,
+  IsIn,
+  IsInt,
+  IsOptional,
+  IsString,
+  Max,
+  Min,
+} from 'class-validator';
+import { WithdrawalMethod } from '../../affiliates/entities/commission-withdrawal.entity';
+import { WITHDRAWAL_STATUS_FILTERS } from '../../affiliates/withdrawal.util';
 
 export class ListWithdrawalsDto {
+  /**
+   * A tab: pending, processing (approved), success (paid), failed (failed +
+   * rejected). Older aliases (approval) and stored statuses are accepted too.
+   */
   @IsOptional()
-  @Transform(({ value }: { value: unknown }) =>
-    typeof value === 'string' && value in STATUS_ALIASES
-      ? STATUS_ALIASES[value]
-      : value,
-  )
-  @IsEnum(WithdrawalStatus)
-  status?: WithdrawalStatus;
+  @IsIn(Object.keys(WITHDRAWAL_STATUS_FILTERS))
+  status?: string;
 
   /** bank or momo_coin */
   @IsOptional()
   @IsEnum(WithdrawalMethod)
   method?: WithdrawalMethod;
 
+  /** Partial match on name, email, account number, bank name or Momo ID. */
   @IsOptional()
   @IsString()
   search?: string;
+
+  @IsOptional()
+  @IsString()
+  affiliator_id?: string;
+
+  /** Inclusive, YYYY-MM-DD, Asia/Jakarta, on created_at. */
+  @IsOptional()
+  @IsDateString()
+  date_from?: string;
+
+  @IsOptional()
+  @IsDateString()
+  date_to?: string;
 
   @IsOptional()
   @Type(() => Number)

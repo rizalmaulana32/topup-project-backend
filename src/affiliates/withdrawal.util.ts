@@ -1,5 +1,23 @@
 import { BadRequestException } from '@nestjs/common';
 import type { ProviderTopUpPort } from '../provider/provider-top-up.port';
+import { WithdrawalStatus } from './entities/commission-withdrawal.entity';
+
+/** The admin withdrawal tabs (also the `counts` badges) -> stored statuses. */
+export const WITHDRAWAL_STATUS_GROUPS = {
+  pending: [WithdrawalStatus.PENDING],
+  processing: [WithdrawalStatus.APPROVED],
+  success: [WithdrawalStatus.PAID],
+  failed: [WithdrawalStatus.FAILED, WithdrawalStatus.REJECTED],
+};
+
+/** Every accepted `status` filter value: a tab name, an older alias, or a stored status. */
+export const WITHDRAWAL_STATUS_FILTERS: Record<string, WithdrawalStatus[]> = {
+  ...WITHDRAWAL_STATUS_GROUPS,
+  approval: [WithdrawalStatus.APPROVED],
+  approved: [WithdrawalStatus.APPROVED],
+  paid: [WithdrawalStatus.PAID],
+  rejected: [WithdrawalStatus.REJECTED],
+};
 
 /**
  * Withdrawal rules shared by affiliates and super affiliates - one copy so

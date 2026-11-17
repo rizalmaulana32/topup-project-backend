@@ -460,6 +460,27 @@ describe('Admin (e2e)', () => {
     ).toBe(false);
   });
 
+  it('finds an affiliate by exact user_id or profile_id via search', async () => {
+    const find = async (search: string) =>
+      (
+        (
+          await request(app.getHttpServer())
+            .get(`/api/v1/admin/affiliates?search=${search}&limit=5`)
+            .set('Authorization', `Bearer ${superadminToken}`)
+            .expect(200)
+        ).body as {
+          data: { items: { profile_id: string; user_id: string }[] };
+        }
+      ).data.items;
+    const [target] = await find(pendingAffiliateProfileId);
+    expect(target.profile_id).toBe(pendingAffiliateProfileId);
+    expect(
+      (await find(target.user_id)).some(
+        (item) => item.profile_id === pendingAffiliateProfileId,
+      ),
+    ).toBe(true);
+  });
+
   it('updates an individual affiliate commission rate override', async () => {
     const response = await request(app.getHttpServer())
       .patch(

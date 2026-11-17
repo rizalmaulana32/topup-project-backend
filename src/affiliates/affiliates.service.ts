@@ -12,6 +12,10 @@ import * as bcrypt from 'bcrypt';
 import { DataSource, In, Repository } from 'typeorm';
 import { insertWithOrderId } from '../common/utils/id-generator.util';
 import {
+  countByGroups,
+  whereJakartaDate,
+} from '../common/utils/list-query.util';
+import {
   assertReferralCodeAvailable,
   generateUniqueReferralCode,
 } from '../common/utils/referral-code.util';
@@ -40,7 +44,11 @@ import {
   WithdrawalMethod,
   WithdrawalStatus,
 } from './entities/commission-withdrawal.entity';
-import { assertMomoIdExists, priceWithdrawal } from './withdrawal.util';
+import {
+  assertMomoIdExists,
+  priceWithdrawal,
+  WITHDRAWAL_STATUS_GROUPS,
+} from './withdrawal.util';
 
 const BCRYPT_SALT_ROUNDS = 10;
 
@@ -1255,11 +1263,19 @@ export class AffiliatesService {
       });
     }
 
-    if (params.search) {
+    const search = params.search?.trim();
+    if (search && /^\d+$/.test(search)) {
+      // All digits = a user_id or profile_id, matched exactly: a partial "5"
+      // would also hit 15, 25, emails like x5@... and push the wanted row
+      // out of a small limit (Reset Password lookup).
       qb.andWhere(
-        '(user.name ILIKE :search OR user.email ILIKE :search OR CAST(profile.id AS TEXT) ILIKE :search)',
-        { search: `%${params.search}%` },
+        '(CAST(profile.id AS TEXT) = :search OR CAST(user.id AS TEXT) = :search)',
+        { search },
       );
+    } else if (search) {
+      qb.andWhere('(user.name ILIKE :search OR user.email ILIKE :search)', {
+        search: `%${search}%`,
+      });
     }
 
     const [items, total] = await qb.getManyAndCount();
@@ -1375,39 +1391,65 @@ export class AffiliatesService {
   }
 
   async findAllWithdrawals(params: {
-    status?: WithdrawalStatus;
+    statuses?: WithdrawalStatus[];
     method?: WithdrawalMethod;
     search?: string;
+    affiliatorId?: string;
+    dateFrom?: string;
+    dateTo?: string;
     limit: number;
     offset: number;
   }) {
     const qb = this.withdrawalRepository
       .createQueryBuilder('withdrawal')
       .leftJoinAndSelect('withdrawal.affiliator', 'affiliator')
-      .leftJoinAndSelect('affiliator.user', 'user')
-      .orderBy('withdrawal.createdAt', 'DESC')
-      .take(params.limit)
-      .skip(params.offset);
-
-    if (params.status) {
-      qb.andWhere('withdrawal.status = :status', { status: params.status });
-    }
+      .leftJoinAndSelect('affiliator.user', 'user');
 
     if (params.method) {
       qb.andWhere('withdrawal.method = :method', { method: params.method });
     }
-
+    if (params.affiliatorId) {
+      qb.andWhere('withdrawal.affiliatorId = :affiliatorId', {
+        affiliatorId: params.affiliatorId,
+      });
+    }
+    whereJakartaDate(
+      qb,
+      'withdrawal.created_at',
+      params.dateFrom,
+      params.dateTo,
+    );
     if (params.search) {
-      qb.andWhere('(user.name ILIKE :search OR user.email ILIKE :search)', {
-        search: `%${params.search}%`,
+      // ponytail: momo_username is a live MomoLive lookup, not a column, so
+      // it isn't searchable; store it on the withdrawal if that's needed.
+      qb.andWhere(
+        `(user.name ILIKE :search OR user.email ILIKE :search
+          OR withdrawal.account_number ILIKE :search OR withdrawal.bank_name ILIKE :search
+          OR withdrawal.momo_user_id ILIKE :search)`,
+        { search: `%${params.search}%` },
+      );
+    }
+
+    const counts = await countByGroups(
+      qb,
+      'withdrawal.status',
+      WITHDRAWAL_STATUS_GROUPS,
+    );
+    if (params.statuses) {
+      qb.andWhere('withdrawal.status IN (:...statuses)', {
+        statuses: params.statuses,
       });
     }
 
-    const [items, total] = await qb.getManyAndCount();
+    const [items, total] = await qb
+      .orderBy('withdrawal.createdAt', 'DESC')
+      .take(params.limit)
+      .skip(params.offset)
+      .getManyAndCount();
     const momoUsers = await this.lookupMomoUsers(
       items.map((w) => w.momoUserId).filter((id): id is string => id !== null),
     );
-    return { items, total, momoUsers };
+    return { items, total, momoUsers, counts };
   }
 }
 
