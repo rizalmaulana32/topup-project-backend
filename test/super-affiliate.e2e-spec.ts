@@ -348,7 +348,7 @@ describe('Super affiliates (e2e)', () => {
         transactionId: id,
         grossAmount: '1500000.00',
       }),
-    ).resolves.toBe('0.00');
+    ).resolves.toEqual({ amount: '0.00', bonusCharged: false });
     const logs: unknown[] = await db.query(
       `SELECT 1 FROM super_affiliate_commission_logs WHERE transaction_id = $1`,
       [id],

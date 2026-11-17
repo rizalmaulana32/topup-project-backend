@@ -46,7 +46,7 @@ describe('TopupService', () => {
   let affiliatesService: jest.Mocked<
     Pick<
       AffiliatesService,
-      'creditCommissionForTransaction' | 'checkCodeValidity'
+      'creditCommissionForTransaction' | 'checkCodeValidity' | 'grossCommission'
     >
   >;
   let creditRevenueMock: jest.Mock;
@@ -102,6 +102,7 @@ describe('TopupService', () => {
     affiliatesService = {
       creditCommissionForTransaction: creditCommissionMock,
       checkCodeValidity: checkCodeValidityMock,
+      grossCommission: jest.fn().mockResolvedValue(0),
     };
     creditRevenueMock = jest.fn();
     platformService = {
@@ -114,7 +115,9 @@ describe('TopupService', () => {
       }),
     };
 
-    creditSuperAffiliateMock = jest.fn().mockResolvedValue('0.00');
+    creditSuperAffiliateMock = jest
+      .fn()
+      .mockResolvedValue({ amount: '0.00', bonusCharged: false });
     hasRecentSendMock = jest.fn().mockResolvedValue(false);
 
     // Same as the migration seed.
@@ -734,7 +737,10 @@ describe('TopupService', () => {
       } as any);
       injectCoinMock.mockResolvedValue({ success: true, response: 'ok' });
       creditCommissionMock.mockResolvedValue('2000.00');
-      creditSuperAffiliateMock.mockResolvedValue('200.00');
+      creditSuperAffiliateMock.mockResolvedValue({
+        amount: '200.00',
+        bonusCharged: false,
+      });
       linkQuService.checkTransactionStatus.mockResolvedValue({
         statusCode: 'success',
         statusMessage: 'SUCCESS',
@@ -743,13 +749,51 @@ describe('TopupService', () => {
 
       await service.handleInvoicePaid('TRX-SA-1');
 
-      expect(creditSuperAffiliateMock).toHaveBeenCalledWith({
-        referralCode: 'AFF-ABC123',
-        transactionId: 'TRX-SA-1',
-        grossAmount: '20000.00',
-      });
+      expect(creditSuperAffiliateMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          referralCode: 'AFF-ABC123',
+          transactionId: 'TRX-SA-1',
+          grossAmount: '20000.00',
+        }),
+      );
       expect(creditRevenueMock).toHaveBeenCalledWith(
         expect.objectContaining({ commissionPaid: '2200.00' }),
+      );
+    });
+
+    it('skips the bonus deduction on the affiliate when the super affiliate absorbed it', async () => {
+      transactionsService.findByExternalId.mockResolvedValue({
+        id: 'TRX-SA-2',
+        paymentStatus: PaymentStatus.PENDING,
+        targetUserId: '1',
+        targetZoneId: '99',
+        referralCode: 'AFF-ABC123',
+        grossAmount: '1000000.00',
+        product: { ...product, bonusCoin: 20000 },
+      } as any);
+      injectCoinMock.mockResolvedValue({ success: true, response: 'ok' });
+      (affiliatesService.grossCommission as jest.Mock).mockResolvedValue(10000);
+      creditSuperAffiliateMock.mockResolvedValue({
+        amount: '30000.00',
+        bonusCharged: true,
+      });
+      creditCommissionMock.mockResolvedValue('10000.00');
+      linkQuService.checkTransactionStatus.mockResolvedValue({
+        statusCode: 'success',
+        statusMessage: 'SUCCESS',
+        fee: '0.00',
+      });
+
+      await service.handleInvoicePaid('TRX-SA-2');
+
+      expect(creditSuperAffiliateMock).toHaveBeenCalledWith(
+        expect.objectContaining({ affiliateGross: 10000 }),
+      );
+      expect(creditCommissionMock).toHaveBeenCalledWith(
+        expect.objectContaining({ bonusDeduction: '0.00' }),
+      );
+      expect(creditRevenueMock).toHaveBeenCalledWith(
+        expect.objectContaining({ commissionPaid: '40000.00' }),
       );
     });
 

@@ -717,6 +717,49 @@ export class AffiliatesService {
     return this.profileRepository.save(profile);
   }
 
+  /** Rate this transaction earns: the flat commissionRate, or the month's tier when tiered mode is on. */
+  private effectiveRate(profile: AffiliatorProfile, originalAmount: number) {
+    if (!profile.tieredCommissionEnabled) {
+      return {
+        effectiveRate: Number(profile.commissionRate),
+        periodUpdate: null,
+      };
+    }
+    const periodKey = currentPeriodKey();
+    const periodVolumeBefore =
+      profile.currentPeriodMonth === periodKey
+        ? Number(profile.currentPeriodVolume)
+        : 0;
+    const periodVolumeAfter = periodVolumeBefore + originalAmount;
+    return {
+      effectiveRate: calculateTieredCommissionRate(periodVolumeAfter),
+      periodUpdate: {
+        currentPeriodVolume: periodVolumeAfter.toFixed(2),
+        currentPeriodMonth: periodKey,
+      },
+    };
+  }
+
+  /**
+   * The affiliate's commission on this transaction BEFORE the bonus coin is
+   * deducted, without crediting anything. Compared against the super
+   * affiliate's commission to decide who absorbs the bonus.
+   * ponytail: unlocked read - a concurrent credit can move the tier between
+   * this and creditCommissionForTransaction; lock both in one transaction if
+   * that edge ever matters.
+   */
+  async grossCommission(
+    referralCode: string,
+    originalAmount: string,
+  ): Promise<number> {
+    const profile = await this.profileRepository.findOne({
+      where: { affiliateCode: referralCode },
+    });
+    if (!profile) return 0;
+    const amount = Number(originalAmount);
+    return (amount * this.effectiveRate(profile, amount).effectiveRate) / 100;
+  }
+
   /**
    * Credits commission for a referred, successfully fulfilled transaction.
    * Uses a pessimistic row lock on the affiliate profile (per the source
@@ -765,27 +808,14 @@ export class AffiliatesService {
       // if the bonus exceeds the commission, the platform absorbs the rest
       // (confirmed with Ricky 2026-11-05) rather than the balance going
       // negative.
+      // When the super affiliate's commission is bigger, the caller charges
+      // the bonus to them instead and passes 0 here (2026-11-17).
       const bonusDeduction = Number(params.bonusDeduction ?? 0);
       const originalAmount = Number(params.originalAmount);
-
-      let effectiveRate = Number(profile.commissionRate);
-      let periodUpdate: {
-        currentPeriodVolume: string;
-        currentPeriodMonth: string;
-      } | null = null;
-      if (profile.tieredCommissionEnabled) {
-        const periodKey = currentPeriodKey();
-        const periodVolumeBefore =
-          profile.currentPeriodMonth === periodKey
-            ? Number(profile.currentPeriodVolume)
-            : 0;
-        const periodVolumeAfter = periodVolumeBefore + originalAmount;
-        effectiveRate = calculateTieredCommissionRate(periodVolumeAfter);
-        periodUpdate = {
-          currentPeriodVolume: periodVolumeAfter.toFixed(2),
-          currentPeriodMonth: periodKey,
-        };
-      }
+      const { effectiveRate, periodUpdate } = this.effectiveRate(
+        profile,
+        originalAmount,
+      );
 
       const commissionAmount = Math.max(
         0,

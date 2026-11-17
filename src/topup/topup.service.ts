@@ -306,23 +306,32 @@ export class TopupService {
     }
 
     if (injectResult.success) {
-      const affiliateCommission = transaction.referralCode
-        ? await this.affiliatesService.creditCommissionForTransaction({
-            referralCode: transaction.referralCode,
-            transactionId: transaction.id,
-            originalAmount: transaction.grossAmount,
-            bonusDeduction: bonusCoin.toFixed(2),
-          })
-        : '0.00';
-      // The affiliate's super affiliate (if any) is paid by the platform on
-      // top of - never out of - the affiliate's commission.
-      const superAffiliateCommission = transaction.referralCode
-        ? await this.superAffiliatesService.creditCommissionForTransaction({
+      // The bonus coin is charged to whichever of the affiliate / super
+      // affiliate earns the bigger gross commission (tie -> affiliate), so
+      // the SA is credited first to settle who absorbs it.
+      let affiliateCommission = '0.00';
+      let superAffiliateCommission = '0.00';
+      if (transaction.referralCode) {
+        const sa =
+          await this.superAffiliatesService.creditCommissionForTransaction({
             referralCode: transaction.referralCode,
             transactionId: transaction.id,
             grossAmount: transaction.grossAmount,
-          })
-        : '0.00';
+            bonusDeduction: bonusCoin.toFixed(2),
+            affiliateGross: await this.affiliatesService.grossCommission(
+              transaction.referralCode,
+              transaction.grossAmount,
+            ),
+          });
+        superAffiliateCommission = sa.amount;
+        affiliateCommission =
+          await this.affiliatesService.creditCommissionForTransaction({
+            referralCode: transaction.referralCode,
+            transactionId: transaction.id,
+            originalAmount: transaction.grossAmount,
+            bonusDeduction: sa.bonusCharged ? '0.00' : bonusCoin.toFixed(2),
+          });
+      }
       const commissionPaid = (
         Number(affiliateCommission) + Number(superAffiliateCommission)
       ).toFixed(2);

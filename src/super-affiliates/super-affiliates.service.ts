@@ -39,6 +39,7 @@ import {
 } from './entities/super-affiliate-profile.entity';
 import { SuperAffiliateWithdrawal } from './entities/super-affiliate-withdrawal.entity';
 import {
+  bonusChargedToSuperAffiliate,
   periodRange,
   qualifiesForSuperAffiliateCommission,
   superAffiliateCommission,
@@ -80,15 +81,20 @@ export class SuperAffiliatesService {
    * Credits the super affiliate above the affiliate who owns referralCode,
    * if the transaction meets that SA's threshold. Paid by the platform on
    * top of the affiliate's own commission (which this never touches).
-   * Returns the amount credited, '0.00' when nothing is owed: no SA, the
-   * affiliate or SA inactive/deleted, threshold not met, or already credited
-   * for this transaction (re-delivered webhook).
+   * If the SA qualifies and their gross commission beats affiliateGross, the
+   * bonus coin is deducted here (bonusCharged: true) and the caller must not
+   * deduct it from the affiliate. amount is '0.00' when nothing is owed: no
+   * SA, the affiliate or SA inactive/deleted, threshold not met, or already
+   * credited for this transaction (re-delivered webhook).
    */
   async creditCommissionForTransaction(params: {
     referralCode: string;
     transactionId: string;
     grossAmount: string;
-  }): Promise<string> {
+    bonusDeduction?: string;
+    affiliateGross?: number;
+  }): Promise<{ amount: string; bonusCharged: boolean }> {
+    const none = { amount: '0.00', bonusCharged: false };
     return this.dataSource.transaction(async (manager) => {
       const affiliate = await manager.findOne(AffiliatorProfile, {
         where: { affiliateCode: params.referralCode },
@@ -97,7 +103,7 @@ export class SuperAffiliatesService {
         !affiliate?.superAffiliateProfileId ||
         !(await isActiveUser(manager, affiliate.userId))
       ) {
-        return '0.00';
+        return none;
       }
 
       // Serializes concurrent webhooks for this SA (balance + monthly volume).
@@ -109,7 +115,7 @@ export class SuperAffiliatesService {
         !superAffiliate ||
         !(await isActiveUser(manager, superAffiliate.userId))
       ) {
-        return '0.00';
+        return none;
       }
 
       const alreadyCredited = await manager.exists(
@@ -122,7 +128,7 @@ export class SuperAffiliatesService {
           },
         },
       );
-      if (alreadyCredited) return '0.00';
+      if (alreadyCredited) return none;
 
       const grossAmount = Number(params.grossAmount);
       let monthVolumeIncludingThis = grossAmount;
@@ -149,8 +155,14 @@ export class SuperAffiliatesService {
         grossAmount,
         monthVolumeIncludingThis,
       });
-      const amount = superAffiliateCommission(grossAmount, rate);
-      if (!qualifies || Number(amount) <= 0) return '0.00';
+      if (!qualifies) return none;
+      const bonusCharged = bonusChargedToSuperAffiliate(
+        (grossAmount * rate) / 100,
+        params.affiliateGross ?? 0,
+      );
+      const bonus = bonusCharged ? Number(params.bonusDeduction ?? 0) : 0;
+      const amount = superAffiliateCommission(grossAmount, rate, bonus);
+      if (Number(amount) <= 0) return { amount: '0.00', bonusCharged };
 
       const newBalance = Number(superAffiliate.commissionBalance) + +amount;
       await manager.update(SuperAffiliateProfile, superAffiliate.id, {
@@ -167,10 +179,10 @@ export class SuperAffiliatesService {
           type: CommissionLogType.CREDIT,
           amount,
           balanceAfter: newBalance.toFixed(2),
-          description: `Super affiliate commission for ${params.transactionId} via ${params.referralCode} (${rate}% of ${grossAmount.toFixed(2)})`,
+          description: `Super affiliate commission for ${params.transactionId} via ${params.referralCode} (${rate}% of ${grossAmount.toFixed(2)} - bonus ${bonus.toFixed(2)})`,
         }),
       );
-      return amount;
+      return { amount, bonusCharged };
     });
   }
 

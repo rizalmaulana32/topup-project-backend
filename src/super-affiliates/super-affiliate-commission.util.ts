@@ -20,12 +20,31 @@ export function qualifiesForSuperAffiliateCommission(params: {
   return amount >= params.thresholdAmount;
 }
 
-/** commission_rate% of the full gross amount - no bonus-coin deduction. */
+/**
+ * commission_rate% of the full gross amount, minus bonusDeduction when the
+ * bonus coin is charged to the SA (floored at 0, platform absorbs the rest).
+ */
 export function superAffiliateCommission(
   grossAmount: number,
   ratePercent: number,
+  bonusDeduction = 0,
 ): string {
-  return ((grossAmount * ratePercent) / 100).toFixed(2);
+  return Math.max(
+    0,
+    (grossAmount * ratePercent) / 100 - bonusDeduction,
+  ).toFixed(2);
+}
+
+/**
+ * The customer's bonus coin is charged to whoever earns the bigger gross
+ * commission on the transaction; a tie stays with the affiliate (client via
+ * Ricky 2026-11-17).
+ */
+export function bonusChargedToSuperAffiliate(
+  superAffiliateGross: number,
+  affiliateGross: number,
+): boolean {
+  return superAffiliateGross > affiliateGross;
 }
 
 /** [start, end) in UTC of a 'YYYY-MM' period key (see currentPeriodKey). */
