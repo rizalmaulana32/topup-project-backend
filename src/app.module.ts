@@ -4,6 +4,7 @@ import { ScheduleModule } from '@nestjs/schedule';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { AppController } from './app.controller';
+import { ServerStatusController } from './server-status.controller';
 import { AppService } from './app.service';
 import { Product } from './products/entities/product.entity';
 import { Transaction } from './transactions/entities/transaction.entity';
@@ -49,7 +50,7 @@ import { SuperAffiliatesModule } from './super-affiliates/super-affiliates.modul
     ManualTopupModule,
     SuperAffiliatesModule,
   ],
-  controllers: [AppController],
+  controllers: [AppController, ServerStatusController],
   providers: [AppService],
 })
 export class AppModule {}
