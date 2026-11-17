@@ -1,7 +1,16 @@
 import { Type } from 'class-transformer';
-import { IsInt, IsOptional, Max, Min } from 'class-validator';
+import { IsDateString, IsInt, IsOptional, Max, Min } from 'class-validator';
 
 export class ListCommissionsDto {
+  /** Inclusive, YYYY-MM-DD, Asia/Jakarta, on created_at. */
+  @IsOptional()
+  @IsDateString()
+  date_from?: string;
+
+  @IsOptional()
+  @IsDateString()
+  date_to?: string;
+
   @IsOptional()
   @Type(() => Number)
   @IsInt()

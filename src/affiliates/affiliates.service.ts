@@ -29,6 +29,7 @@ import { TransactionsService } from '../transactions/transactions.service';
 import { User, UserRole, UserStatus } from '../users/entities/user.entity';
 import { UsersService } from '../users/users.service';
 import { RegisterAffiliateDto } from './dto/register-affiliate.dto';
+import { filterHistory, type HistoryFilter } from './history-filter.util';
 import {
   calculateTieredCommissionRate,
   currentPeriodKey,
@@ -177,7 +178,8 @@ export class AffiliatesService {
     };
   }
 
-  async getDashboard(userId: string) {
+  /** The logged-in affiliate's own profile; only once approved. */
+  async findActiveProfileForUser(userId: string): Promise<AffiliatorProfile> {
     const profile = await this.profileRepository.findOne({
       where: { userId },
       relations: { user: true },
@@ -192,21 +194,63 @@ export class AffiliatesService {
         'Your affiliate application is pending superadmin approval.',
       );
     }
+    return profile;
+  }
 
+  /** referred_transactions + commission_history items, newest first. */
+  private async getHistory(profile: AffiliatorProfile) {
     const referredTransactions = profile.affiliateCode
       ? await this.transactionsService.findByReferralCode(profile.affiliateCode)
       : [];
-
     const commissionHistory = await this.commissionLogRepository.find({
       where: { affiliatorId: profile.id },
       order: { createdAt: 'DESC' },
     });
-
     const { historyItem, referred } = await this.buildHistoryInfo(
       profile.affiliateCode,
       referredTransactions,
       commissionHistory,
     );
+    return { referred, commissions: commissionHistory.map(historyItem) };
+  }
+
+  /** One filtered page of referred_transactions (gateway + manual). */
+  async listReferredTransactions(
+    profile: AffiliatorProfile,
+    filter: HistoryFilter,
+  ) {
+    const { referred } = await this.getHistory(profile);
+    return filterHistory(
+      referred,
+      filter,
+      (t) => t.gross_amount,
+      (t) => [t.transaction_id, t.target_user_id, t.username],
+    );
+  }
+
+  /** One filtered page of commission_history (credits, withdrawal debits). */
+  async listCommissionHistory(
+    profile: AffiliatorProfile,
+    filter: HistoryFilter,
+  ) {
+    const { commissions } = await this.getHistory(profile);
+    return filterHistory(
+      commissions,
+      filter,
+      (c) => c.amount,
+      (c) => [
+        c.description,
+        c.transaction_id,
+        c.target_user_id,
+        c.username,
+        c.withdrawal?.withdrawal_id,
+      ],
+    );
+  }
+
+  async getDashboard(userId: string) {
+    const profile = await this.findActiveProfileForUser(userId);
+    const { referred, commissions } = await this.getHistory(profile);
 
     return {
       affiliate_code: profile.affiliateCode,
@@ -218,33 +262,19 @@ export class AffiliatesService {
       total_commission_earned: profile.totalCommissionEarned,
       referred_transaction_count: referred.length,
       referred_transactions: referred,
-      commission_history: commissionHistory.map(historyItem),
+      commission_history: commissions,
     };
   }
 
   /** Admin-facing full detail view for one affiliate (client request via Ricky 2026-11-02: "penambahan detail informasi affiliate"). */
   async getAdminAffiliateDetail(profileId: string) {
     const profile = await this.findProfileByIdOrFail(profileId);
-
-    const referredTransactions = profile.affiliateCode
-      ? await this.transactionsService.findByReferralCode(profile.affiliateCode)
-      : [];
-
-    const commissionHistory = await this.commissionLogRepository.find({
-      where: { affiliatorId: profile.id },
-      order: { createdAt: 'DESC' },
-    });
+    const { referred, commissions } = await this.getHistory(profile);
 
     const withdrawals = await this.withdrawalRepository.find({
       where: { affiliatorId: profile.id },
       order: { createdAt: 'DESC' },
     });
-
-    const { historyItem, referred } = await this.buildHistoryInfo(
-      profile.affiliateCode,
-      referredTransactions,
-      commissionHistory,
-    );
 
     return {
       profile_id: profile.id,
@@ -270,7 +300,7 @@ export class AffiliatesService {
       created_at: profile.createdAt,
       referred_transaction_count: referred.length,
       referred_transactions: referred,
-      commission_history: commissionHistory.map(historyItem),
+      commission_history: commissions,
       withdrawals: withdrawals.map((withdrawal) => ({
         withdrawal_id: withdrawal.id,
         method: withdrawal.method,

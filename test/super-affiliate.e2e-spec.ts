@@ -421,6 +421,46 @@ describe('Super affiliates (e2e)', () => {
       .expect(403);
   });
 
+  it('pages the downline, commissions and withdrawals; without limit the old arrays stay', async () => {
+    const get = async (path: string, token = saToken) =>
+      dataOf(
+        await http()
+          .get(path)
+          .set('Authorization', `Bearer ${token}`)
+          .expect(200),
+      ) as unknown as {
+        items: { affiliate_code: string }[];
+        total: number;
+      } & unknown[];
+
+    const all = await get('/api/v1/super-affiliate/affiliates');
+    expect(Array.isArray(all)).toBe(true);
+    const page = await get('/api/v1/super-affiliate/affiliates?limit=1');
+    expect(page.total).toBe(all.length);
+    expect(page.items).toHaveLength(1);
+    const found = await get(
+      `/api/v1/admin/super-affiliates/${saId}/affiliates?search=down-2`,
+      adminToken,
+    );
+    expect(found.items.map((a) => a.affiliate_code)).toEqual(['DOWN-2']);
+
+    expect(
+      (
+        await get(
+          `/api/v1/admin/super-affiliates/${saId}/commissions?date_to=2000-01-01`,
+          adminToken,
+        )
+      ).total,
+    ).toBe(0);
+    expect(
+      Array.isArray(await get('/api/v1/super-affiliate/withdrawals')),
+    ).toBe(true);
+    expect(
+      (await get('/api/v1/super-affiliate/withdrawals?limit=5&status=failed'))
+        .total,
+    ).toBeGreaterThanOrEqual(0);
+  });
+
   it('SA withdrawal: request locks, reject refunds with a CREDIT log, approve + process pays', async () => {
     const balance = async () => {
       const [row]: { commission_balance: string }[] = await db.query(

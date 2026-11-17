@@ -224,6 +224,60 @@ describe('Commission crediting and withdrawal (e2e)', () => {
     expect(logs[0].amount).toBe('200000.00');
   });
 
+  it('pages and filters transaction and commission history (affiliate and admin)', async () => {
+    type Page = {
+      items: { transaction_id: string; type?: string }[];
+      total: number;
+      limit: number;
+    };
+    const get = async (path: string, token: string) =>
+      (
+        (
+          await request(app.getHttpServer())
+            .get(path)
+            .set('Authorization', `Bearer ${token}`)
+            .expect(200)
+        ).body as { data: Page }
+      ).data;
+
+    const paid = await get(
+      '/api/v1/affiliate/transactions?status=paid&limit=1',
+      affiliateToken,
+    );
+    expect(paid.total).toBeGreaterThan(0);
+    expect(paid.items).toHaveLength(1);
+    expect(
+      (
+        await get(
+          '/api/v1/affiliate/transactions?date_to=2000-01-01',
+          affiliateToken,
+        )
+      ).total,
+    ).toBe(0);
+    const credits = await get(
+      '/api/v1/affiliate/commissions?type=credit',
+      affiliateToken,
+    );
+    expect(credits.total).toBeGreaterThan(0);
+    expect(credits.items.every((c) => c.type === 'credit')).toBe(true);
+
+    const admin = await get(
+      `/api/v1/admin/affiliates/${affiliateProfileId}/transactions?search=${paid.items[0].transaction_id}`,
+      superadminToken,
+    );
+    expect(admin.items.map((t) => t.transaction_id)).toEqual([
+      paid.items[0].transaction_id,
+    ]);
+    expect(
+      (
+        await get(
+          `/api/v1/admin/affiliates/${affiliateProfileId}/commissions`,
+          superadminToken,
+        )
+      ).total,
+    ).toBe(credits.total);
+  });
+
   it('rejects a withdrawal request without an affiliator-role token', async () => {
     await request(app.getHttpServer())
       .post('/api/v1/affiliate/withdraw')

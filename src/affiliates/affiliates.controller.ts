@@ -19,6 +19,7 @@ import { UserRole } from '../users/entities/user.entity';
 import { AffiliatesService } from './affiliates.service';
 import { CheckEmailDto } from './dto/check-email.dto';
 import { CheckReferralCodeDto } from './dto/check-referral-code.dto';
+import { ListHistoryDto, toHistoryFilter } from './dto/list-history.dto';
 import { RegisterAffiliateDto } from './dto/register-affiliate.dto';
 import { UpdateBankDetailsDto } from './dto/update-bank-details.dto';
 import { WithdrawDto } from './dto/withdraw.dto';
@@ -75,6 +76,51 @@ export class AffiliatesController {
   })
   async dashboard(@Req() request: Request & { user: AuthenticatedUser }) {
     const data = await this.affiliatesService.getDashboard(request.user.id);
+    return { success: true, data };
+  }
+
+  @Get('transactions')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.AFFILIATOR)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary:
+      'One page of own referred transactions (gateway + manual), same items as dashboard referred_transactions. Filters: search, status, source, date_from/date_to, weekday, amount_min/amount_max.',
+  })
+  async transactions(
+    @Req() request: Request & { user: AuthenticatedUser },
+    @Query() query: ListHistoryDto,
+  ) {
+    const profile = await this.affiliatesService.findActiveProfileForUser(
+      request.user.id,
+    );
+    const data = await this.affiliatesService.listReferredTransactions(
+      profile,
+      { ...toHistoryFilter(query), type: undefined },
+    );
+    return { success: true, data };
+  }
+
+  @Get('commissions')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.AFFILIATOR)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary:
+      'One page of own commission history, same items as dashboard commission_history. Filters: search, type, date_from/date_to, weekday, amount_min/amount_max.',
+  })
+  async commissions(
+    @Req() request: Request & { user: AuthenticatedUser },
+    @Query() query: ListHistoryDto,
+  ) {
+    const profile = await this.affiliatesService.findActiveProfileForUser(
+      request.user.id,
+    );
+    const data = await this.affiliatesService.listCommissionHistory(profile, {
+      ...toHistoryFilter(query),
+      status: undefined,
+      source: undefined,
+    });
     return { success: true, data };
   }
 

@@ -22,6 +22,7 @@ import {
   priceWithdrawal,
 } from '../affiliates/withdrawal.util';
 import { insertWithOrderId } from '../common/utils/id-generator.util';
+import { whereJakartaDate } from '../common/utils/list-query.util';
 import {
   assertReferralCodeAvailable,
   generateUniqueReferralCode,
@@ -54,6 +55,13 @@ export interface SuperAffiliateRuleChanges {
   thresholdMode?: SuperAffiliateThresholdMode;
   thresholdAmount?: number;
   status?: UserStatus;
+}
+
+interface CommissionLogPage {
+  dateFrom?: string;
+  dateTo?: string;
+  limit: number;
+  offset: number;
 }
 
 @Injectable()
@@ -490,15 +498,77 @@ export class SuperAffiliatesService {
     return this.getDownlineItems(profile.id);
   }
 
-  async getOwnCommissions(userId: string, limit: number, offset: number) {
+  async getOwnCommissions(userId: string, page: CommissionLogPage) {
     const profile = await this.findOwnOrFail(userId);
-    const [logs, total] = await this.logRepository.findAndCount({
-      where: { superAffiliateProfileId: profile.id },
-      order: { createdAt: 'DESC', id: 'DESC' },
-      take: limit,
-      skip: offset,
-    });
-    return { items: logs.map(toLogItem), total, limit, offset };
+    return this.listCommissionLogs(profile.id, page);
+  }
+
+  async listCommissionLogs(superAffiliateId: string, page: CommissionLogPage) {
+    const qb = this.logRepository
+      .createQueryBuilder('log')
+      .where('log.superAffiliateProfileId = :superAffiliateId', {
+        superAffiliateId,
+      });
+    whereJakartaDate(qb, 'log.created_at', page.dateFrom, page.dateTo);
+    const [logs, total] = await qb
+      .orderBy('log.createdAt', 'DESC')
+      .addOrderBy('log.id', 'DESC')
+      .take(page.limit)
+      .skip(page.offset)
+      .getManyAndCount();
+    return {
+      items: logs.map(toLogItem),
+      total,
+      limit: page.limit,
+      offset: page.offset,
+    };
+  }
+
+  /**
+   * One page of the downline, searched by name, email, code or affiliator ID.
+   * ponytail: filters in memory over the whole downline (one month-volume
+   * query for all of it); push into SQL if a downline reaches thousands.
+   */
+  async listDownline(
+    superAffiliateId: string,
+    page: { search?: string; limit: number; offset: number },
+  ) {
+    const downline = await this.getDownlineItems(superAffiliateId);
+    const search = page.search?.trim().toLowerCase();
+    const matches = search
+      ? downline.filter((a) =>
+          [a.name, a.email, a.affiliate_code, String(a.affiliator_id)].some(
+            (text) => text?.toLowerCase().includes(search),
+          ),
+        )
+      : downline;
+    return {
+      items: matches.slice(page.offset, page.offset + page.limit),
+      total: matches.length,
+      limit: page.limit,
+      offset: page.offset,
+    };
+  }
+
+  async getOwnDownlinePage(
+    userId: string,
+    page: { search?: string; limit: number; offset: number },
+  ) {
+    const profile = await this.findOwnOrFail(userId);
+    return this.listDownline(profile.id, page);
+  }
+
+  async getOwnWithdrawalsPage(
+    userId: string,
+    page: {
+      statuses?: WithdrawalStatus[];
+      method?: WithdrawalMethod;
+      limit: number;
+      offset: number;
+    },
+  ) {
+    const profile = await this.findOwnOrFail(userId);
+    return this.findAllWithdrawals({ ...page, superAffiliateId: profile.id });
   }
 
   async updateOwnBankDetails(

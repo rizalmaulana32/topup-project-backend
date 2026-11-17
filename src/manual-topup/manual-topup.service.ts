@@ -23,6 +23,7 @@ import {
 import { AffiliatesService } from '../affiliates/affiliates.service';
 import { AffiliatorProfile } from '../affiliates/entities/affiliator-profile.entity';
 import { insertWithOrderId } from '../common/utils/id-generator.util';
+import { countByGroups } from '../common/utils/list-query.util';
 import {
   assertReferralCodeAvailable,
   generateUniqueReferralCode,
@@ -441,22 +442,53 @@ export class ManualTopupService {
     createdBy?: string;
     limit: number;
     offset: number;
-  }): Promise<{ items: ManualTopup[]; total: number }> {
-    const where: Record<string, unknown> = {};
-    if (params.status) {
-      where.status = params.status;
-    }
+  }) {
+    const qb = this.manualTopupRepository.createQueryBuilder('m');
     if (params.createdBy) {
-      where.createdBy = params.createdBy;
+      qb.andWhere('m.createdBy = :createdBy', { createdBy: params.createdBy });
     }
+    const counts = await countByGroups(
+      qb,
+      'm.status',
+      Object.fromEntries(
+        Object.values(ManualTopupStatus).map((s) => [s, [s]]),
+      ) as Record<ManualTopupStatus, ManualTopupStatus[]>,
+    );
+    if (params.status) {
+      qb.andWhere('m.status = :status', { status: params.status });
+    }
+    const [items, total] = await qb
+      .orderBy('m.createdAt', 'DESC')
+      .take(params.limit)
+      .skip(params.offset)
+      .getManyAndCount();
+    return { items, total, counts };
+  }
 
-    const [items, total] = await this.manualTopupRepository.findAndCount({
-      where,
-      order: { createdAt: 'DESC' },
-      take: params.limit,
-      skip: params.offset,
+  /**
+   * One page of an admin's manual top-ups with each one's sends, for the
+   * admin detail page (replaces getAdminDetail's unpaginated manualTopups).
+   * Works for deleted admins too.
+   */
+  async findAdminTopups(
+    adminProfileId: string,
+    params: { status?: ManualTopupStatus; limit: number; offset: number },
+  ) {
+    const profile = await this.profileRepository.findOne({
+      where: { id: adminProfileId },
+      withDeleted: true,
     });
-    return { items, total };
+    if (!profile) {
+      throw new NotFoundException(`Admin profile ${adminProfileId} not found`);
+    }
+    const page = await this.findAll({ ...params, createdBy: profile.userId });
+    const sends = page.items.length
+      ? await this.sendRepository.find({
+          where: { manualTopupId: In(page.items.map((m) => m.id)) },
+          order: { sentAt: 'ASC' },
+        })
+      : [];
+    return { ...page, sends };
   }
 
   async findSendsForManualTopup(

@@ -19,6 +19,11 @@ import { RolesGuard } from '../auth/roles.guard';
 import { AuthenticatedUser } from '../auth/types/jwt-payload';
 import { UserRole } from '../users/entities/user.entity';
 import { ListCommissionsDto } from './dto/list-commissions.dto';
+import {
+  ListDownlineDto,
+  ListOwnWithdrawalsDto,
+} from './dto/list-downline.dto';
+import { WITHDRAWAL_STATUS_FILTERS } from '../affiliates/withdrawal.util';
 import { SuperAffiliatesService } from './super-affiliates.service';
 
 type AuthedRequest = Request & { user: AuthenticatedUser };
@@ -44,11 +49,24 @@ export class SuperAffiliatesController {
   }
 
   @Get('affiliates')
-  @ApiOperation({ summary: 'Downline affiliates with this month volume each' })
-  async affiliates(@Req() req: AuthedRequest) {
+  @ApiOperation({
+    summary:
+      'Downline affiliates with this month volume each. With limit: { items, total, limit, offset } and optional search (name, email, code, affiliator ID); without limit: the old plain array.',
+  })
+  async affiliates(@Query() query: ListDownlineDto, @Req() req: AuthedRequest) {
+    if (query.limit === undefined) {
+      return {
+        success: true,
+        data: await this.service.getOwnDownline(req.user.id),
+      };
+    }
     return {
       success: true,
-      data: await this.service.getOwnDownline(req.user.id),
+      data: await this.service.getOwnDownlinePage(req.user.id, {
+        search: query.search,
+        limit: query.limit,
+        offset: query.offset ?? 0,
+      }),
     };
   }
 
@@ -59,11 +77,12 @@ export class SuperAffiliatesController {
   ) {
     return {
       success: true,
-      data: await this.service.getOwnCommissions(
-        req.user.id,
-        query.limit ?? 20,
-        query.offset ?? 0,
-      ),
+      data: await this.service.getOwnCommissions(req.user.id, {
+        dateFrom: query.date_from,
+        dateTo: query.date_to,
+        limit: query.limit ?? 20,
+        offset: query.offset ?? 0,
+      }),
     };
   }
 
@@ -114,10 +133,30 @@ export class SuperAffiliatesController {
   }
 
   @Get('withdrawals')
-  async withdrawals(@Req() req: AuthedRequest) {
+  @ApiOperation({
+    summary:
+      'Own payout requests. With limit: { items, total, limit, offset } and optional status (pending, processing, success, failed) and method; without limit: the old plain array.',
+  })
+  async withdrawals(
+    @Query() query: ListOwnWithdrawalsDto,
+    @Req() req: AuthedRequest,
+  ) {
+    if (query.limit === undefined) {
+      return {
+        success: true,
+        data: await this.service.getOwnWithdrawals(req.user.id),
+      };
+    }
     return {
       success: true,
-      data: await this.service.getOwnWithdrawals(req.user.id),
+      data: await this.service.getOwnWithdrawalsPage(req.user.id, {
+        statuses: query.status
+          ? WITHDRAWAL_STATUS_FILTERS[query.status]
+          : undefined,
+        method: query.method,
+        limit: query.limit,
+        offset: query.offset ?? 0,
+      }),
     };
   }
 }

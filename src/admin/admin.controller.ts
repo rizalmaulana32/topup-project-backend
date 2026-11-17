@@ -70,6 +70,10 @@ import { ListContactMessagesDto } from './dto/list-contact-messages.dto';
 import { ListPlatformWithdrawalsDto } from '../platform/dto/list-platform-withdrawals.dto';
 import { ListTransactionsDto } from './dto/list-transactions.dto';
 import { ListWithdrawalsDto } from './dto/list-withdrawals.dto';
+import {
+  ListHistoryDto,
+  toHistoryFilter,
+} from '../affiliates/dto/list-history.dto';
 import { WITHDRAWAL_STATUS_FILTERS } from '../affiliates/withdrawal.util';
 import { MoveUplineDto } from './dto/move-upline.dto';
 import { PlatformWithdrawDto } from '../platform/dto/platform-withdraw.dto';
@@ -180,6 +184,43 @@ export class AdminController {
   })
   async getAffiliateDetail(@Param('id') id: string) {
     const data = await this.affiliatesService.getAdminAffiliateDetail(id);
+    return { success: true, data };
+  }
+
+  @Get('affiliates/:id/transactions')
+  @ApiOperation({
+    summary:
+      "One page of an affiliate's referred transactions (gateway + manual), same items as referred_transactions in GET /admin/affiliates/:id. Filters: search, status, source, date_from/date_to, weekday, amount_min/amount_max.",
+  })
+  @ApiParam({ name: 'id', description: 'The affiliate PROFILE ID' })
+  async listAffiliateTransactions(
+    @Param('id') id: string,
+    @Query() query: ListHistoryDto,
+  ) {
+    const profile = await this.affiliatesService.findProfileByIdOrFail(id);
+    const data = await this.affiliatesService.listReferredTransactions(
+      profile,
+      { ...toHistoryFilter(query), type: undefined },
+    );
+    return { success: true, data };
+  }
+
+  @Get('affiliates/:id/commissions')
+  @ApiOperation({
+    summary:
+      "One page of an affiliate's commission history, same items as commission_history in GET /admin/affiliates/:id. Filters: search, type, date_from/date_to, weekday, amount_min/amount_max.",
+  })
+  @ApiParam({ name: 'id', description: 'The affiliate PROFILE ID' })
+  async listAffiliateCommissions(
+    @Param('id') id: string,
+    @Query() query: ListHistoryDto,
+  ) {
+    const profile = await this.affiliatesService.findProfileByIdOrFail(id);
+    const data = await this.affiliatesService.listCommissionHistory(profile, {
+      ...toHistoryFilter(query),
+      status: undefined,
+      source: undefined,
+    });
     return { success: true, data };
   }
 

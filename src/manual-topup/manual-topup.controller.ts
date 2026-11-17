@@ -104,6 +104,43 @@ export class ManualTopupController {
     return { success: true, data: toAdminDetailResponse(detail) };
   }
 
+  @Get('manual-admins/:id/topups')
+  @ApiOperation({
+    summary:
+      "One page of an admin's manual top-ups (newest first), each with its sends - same items as manual_topups in GET /admin/manual-admins/:id. Optional status filter; counts = per-status totals ignoring status. Works for deleted admins too.",
+  })
+  @ApiParam({
+    name: 'id',
+    description: 'The admin PROFILE ID from GET /admin/manual-admins',
+  })
+  async listAdminTopups(
+    @Param('id') id: string,
+    @Query() query: ListManualTopupsDto,
+  ) {
+    const limit = query.limit ?? 20;
+    const offset = query.offset ?? 0;
+    const page = await this.manualTopupService.findAdminTopups(id, {
+      status: query.status,
+      limit,
+      offset,
+    });
+    return {
+      success: true,
+      data: {
+        items: page.items.map((manualTopup) => ({
+          ...toManualTopupResponse(manualTopup),
+          sends: page.sends
+            .filter((send) => send.manualTopupId === manualTopup.id)
+            .map(toSendResponse),
+        })),
+        counts: page.counts,
+        total: page.total,
+        limit,
+        offset,
+      },
+    };
+  }
+
   @Get('manual-admins/:id/export')
   @ApiOperation({
     summary:

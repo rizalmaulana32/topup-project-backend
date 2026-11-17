@@ -22,6 +22,8 @@ import { AuthenticatedUser } from '../auth/types/jwt-payload';
 import { UserRole } from '../users/entities/user.entity';
 import { CreateSuperAffiliateDto } from './dto/create-super-affiliate.dto';
 import { ListSuperAffiliateWithdrawalsDto } from './dto/list-super-affiliate-withdrawals.dto';
+import { ListCommissionsDto } from './dto/list-commissions.dto';
+import { ListDownlineDto } from './dto/list-downline.dto';
 import { UpdateSuperAffiliateDto } from './dto/update-super-affiliate.dto';
 import { SuperAffiliatesService } from './super-affiliates.service';
 import { WITHDRAWAL_STATUS_FILTERS } from '../affiliates/withdrawal.util';
@@ -126,6 +128,44 @@ export class SuperAffiliatesAdminController {
   ) {
     await this.service.resetPassword(id, dto.new_password);
     return { success: true };
+  }
+
+  @Get('super-affiliates/:id/affiliates')
+  @ApiOperation({
+    summary:
+      'One page of the downline (same items as affiliates in GET /admin/super-affiliates/:id); search = name, email, code, affiliator ID.',
+  })
+  async listDownline(@Param('id') id: string, @Query() query: ListDownlineDto) {
+    const profile = await this.service.findOrFail(id);
+    return {
+      success: true,
+      data: await this.service.listDownline(profile.id, {
+        search: query.search,
+        limit: query.limit ?? 20,
+        offset: query.offset ?? 0,
+      }),
+    };
+  }
+
+  @Get('super-affiliates/:id/commissions')
+  @ApiOperation({
+    summary:
+      'One page of commission logs (same items as commission_logs in GET /admin/super-affiliates/:id); date_from/date_to inclusive, Asia/Jakarta.',
+  })
+  async listCommissions(
+    @Param('id') id: string,
+    @Query() query: ListCommissionsDto,
+  ) {
+    const profile = await this.service.findOrFail(id);
+    return {
+      success: true,
+      data: await this.service.listCommissionLogs(profile.id, {
+        dateFrom: query.date_from,
+        dateTo: query.date_to,
+        limit: query.limit ?? 20,
+        offset: query.offset ?? 0,
+      }),
+    };
   }
 
   @Get('super-affiliate-withdrawals')

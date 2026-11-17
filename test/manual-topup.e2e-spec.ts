@@ -345,6 +345,23 @@ describe('Manual top-up (e2e)', () => {
     expect(mine?.total_coin_sent).toBe('300.00');
   });
 
+  it("pages an admin's manual top-ups with their sends and per-status counts", async () => {
+    const response = await request(app.getHttpServer())
+      .get(`/api/v1/admin/manual-admins/${manualAdminProfileId}/topups?limit=1`)
+      .set('Authorization', `Bearer ${superadminToken}`)
+      .expect(200);
+    const body = response.body as {
+      data: {
+        items: { sends: unknown[] }[];
+        total: number;
+        counts: Record<string, number>;
+      };
+    };
+    expect(body.data.items).toHaveLength(1);
+    expect(Array.isArray(body.data.items[0].sends)).toBe(true);
+    expect(body.data.counts.all).toBe(body.data.total);
+  });
+
   it('cancels an active manual top-up before completion', async () => {
     const createResponse = await request(app.getHttpServer())
       .post('/api/v1/admin/manual-topups')
