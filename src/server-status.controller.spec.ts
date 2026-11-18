@@ -1,4 +1,39 @@
-import { parseAuthLog, serverWarnings } from './server-status.controller';
+import {
+  parseAuthLog,
+  parseWhois,
+  serverWarnings,
+} from './server-status.controller';
+
+describe('parseWhois', () => {
+  it('takes country and org-name from a RIPE record', () => {
+    const out = [
+      'inetnum:        193.160.32.0 - 193.160.32.255',
+      'netname:        US-SHOCK1-20191118',
+      'country:        DE',
+      'org-name:       Shock Hosting LLC',
+      'country:        US',
+    ].join('\n');
+    expect(parseWhois(out)).toBe('DE · Shock Hosting LLC');
+  });
+
+  it('skips the ARIN referral stub and falls back to descr', () => {
+    const out = [
+      'NetName:        APNIC',
+      'OrgName:        Asia Pacific Network Information Centre',
+      'Country:        AU',
+      '',
+      'inetnum:        66.96.224.0 - 66.96.255.255',
+      'netname:        MYREPUBLIC-ID',
+      'descr:          PT. Eka Mas Republik',
+      'country:        ID',
+    ].join('\n');
+    expect(parseWhois(out)).toBe('ID · PT. Eka Mas Republik');
+  });
+
+  it('returns empty for unparseable output', () => {
+    expect(parseWhois('% no entries found')).toBe('');
+  });
+});
 
 describe('parseAuthLog', () => {
   const log = [
@@ -61,6 +96,7 @@ describe('serverWarnings', () => {
     certificates: [{ domain: 'yaytopup.id', days_left: 60 }],
     last_backup_hours: 2,
     ssh: {
+      origins: {},
       failed_1h: 300,
       top_failed: [],
       banned: 4,

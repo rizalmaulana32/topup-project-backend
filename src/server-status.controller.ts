@@ -11,6 +11,7 @@ import { InjectDataSource } from '@nestjs/typeorm';
 import { execFile } from 'node:child_process';
 import { timingSafeEqual, X509Certificate } from 'node:crypto';
 import { open, readdir, readFile, stat, statfs } from 'node:fs/promises';
+import { isIP } from 'node:net';
 import { cpus, loadavg, uptime } from 'node:os';
 import { promisify } from 'node:util';
 import { DataSource } from 'typeorm';
@@ -56,6 +57,58 @@ export interface SshActivity {
     method: string;
     count: number;
   }[];
+  /** Whois summary ("US · SPARKED HOST LLC") per IP above; '' when unknown. */
+  origins: Record<string, string>;
+}
+
+const REGISTRY_PLACEHOLDER =
+  /^(?:APNIC|RIPE|ARIN|LACNIC|AFRINIC|IANA)\b|Coordination Centre|Information Centre/i;
+
+/**
+ * "COUNTRY · organisation" from raw whois output. Records start at each
+ * netname; registry referral stubs (e.g. ARIN pointing at APNIC) are skipped
+ * and the last real record wins.
+ */
+export function parseWhois(text: string): string {
+  const records: Record<string, string>[] = [];
+  for (const line of text.split('\n')) {
+    const m = /^([A-Za-z-]+):\s*(.*)$/.exec(line);
+    if (!m) continue;
+    const key = m[1].toLowerCase();
+    const value = m[2].trim();
+    if (key === 'netname') records.push({});
+    const r = records.at(-1);
+    if (r && value && !(key in r)) r[key] = value;
+  }
+  const r = records
+    .reverse()
+    .find(
+      (x) =>
+        !REGISTRY_PLACEHOLDER.test(x.netname ?? '') &&
+        !REGISTRY_PLACEHOLDER.test(x.orgname ?? ''),
+    );
+  if (!r) return '';
+  const org = (r['org-name'] ?? r.orgname ?? r.descr ?? r.netname).slice(0, 40);
+  return [r.country?.toUpperCase(), org].filter(Boolean).join(' · ');
+}
+
+// ponytail: in-process cache, lost on restart; IP owners rarely change
+const whoisCache = new Map<string, string>();
+
+async function ipOrigin(ip: string): Promise<string> {
+  if (!isIP(ip)) return '';
+  const hit = whoisCache.get(ip);
+  if (hit !== undefined) return hit;
+  let origin = '';
+  try {
+    const { stdout } = await run('whois', [ip], { timeout: 8000 });
+    origin = parseWhois(stdout);
+  } catch {
+    // whois missing or timed out: show the IP without origin
+  }
+  if (whoisCache.size > 500) whoisCache.clear();
+  whoisCache.set(ip, origin);
+  return origin;
 }
 
 const SSHD_LINE = /^(\S+) \S+ sshd(?:-session)?\[(\d+)\]: (.*)$/;
@@ -73,7 +126,7 @@ const FAILED =
 export function parseAuthLog(
   text: string,
   sinceMs: number,
-): Omit<SshActivity, 'banned'> {
+): Omit<SshActivity, 'banned' | 'origins'> {
   const failedPid = new Map<string, string>();
   const logins = new Map<string, SshActivity['logins'][number]>();
   for (const line of text.split('\n')) {
@@ -354,7 +407,17 @@ async function sshActivity(): Promise<SshActivity> {
   } catch {
     // fail2ban not installed/running; its service state already shows that
   }
-  return { ...parseAuthLog(text, Date.now() - 3600000), banned };
+  const activity = parseAuthLog(text, Date.now() - 3600000);
+  const ips = [
+    ...new Set([
+      ...activity.top_failed.map((f) => f.ip),
+      ...activity.logins.map((l) => l.ip),
+    ]),
+  ];
+  const origins = Object.fromEntries(
+    await Promise.all(ips.map(async (ip) => [ip, await ipOrigin(ip)])),
+  ) as Record<string, string>;
+  return { ...activity, banned, origins };
 }
 
 /** Hours since the newest file in /root/backups (manual pre-deploy dumps). */
