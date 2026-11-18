@@ -192,6 +192,7 @@ describe('serverWarnings', () => {
       failed_1h: 300,
       top_failed: [],
       banned: 4,
+      banned_ips: [],
       logins: [
         {
           first: '',

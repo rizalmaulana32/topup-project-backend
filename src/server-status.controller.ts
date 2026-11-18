@@ -54,6 +54,8 @@ export interface SshActivity {
   /** `first`/`last`: timestamps of the IP's first and last attempt in the window. */
   top_failed: { ip: string; count: number; first: string; last: string }[];
   banned: number | null;
+  /** IPs fail2ban is blocking right now (sshd + recidive jails). */
+  banned_ips: string[];
   /** Grouped per user+IP+method; `first`..`at` spans them, `at` is the latest. */
   logins: {
     first: string;
@@ -208,7 +210,7 @@ function loginsByIp(logins: SshLoginEvent[]): SshActivity['logins'] {
 export function parseAuthLog(
   text: string,
   sinceMs: number,
-): Omit<SshActivity, 'banned' | 'origins'> {
+): Omit<SshActivity, 'banned' | 'banned_ips' | 'origins'> {
   const { failed, logins } = authEvents(text);
   const f = failed.filter((e) => e.ms >= sinceMs);
   return {
@@ -602,19 +604,25 @@ async function sshActivity(): Promise<SshActivity> {
     // no auth.log: report zeros rather than fail the whole status
   }
   let banned: number | null = null;
-  try {
-    const { stdout } = await run('fail2ban-client', ['status', 'sshd']);
-    const m = /Currently banned:\s*(\d+)/.exec(stdout);
-    banned = m ? Number(m[1]) : null;
-  } catch {
-    // fail2ban not installed/running; its service state already shows that
+  const bannedIps = new Set<string>();
+  for (const jail of ['sshd', 'recidive']) {
+    try {
+      const { stdout } = await run('fail2ban-client', ['status', jail]);
+      const list = /Banned IP list:[ \t]*(.*)/.exec(stdout)?.[1] ?? '';
+      for (const ip of list.split(/\s+/)) if (isIP(ip)) bannedIps.add(ip);
+      banned = bannedIps.size;
+    } catch {
+      // fail2ban (or this jail) not running; its service state already shows that
+    }
   }
   const activity = parseAuthLog(text, Date.now() - 3600000);
+  const banned_ips = [...bannedIps];
   const origins = await originsFor([
     ...activity.top_failed.map((f) => f.ip),
     ...activity.logins.map((l) => l.ip),
+    ...banned_ips,
   ]);
-  return { ...activity, banned, origins };
+  return { ...activity, banned, banned_ips, origins };
 }
 
 /** Hours since the newest file in /root/backups (manual pre-deploy dumps). */
