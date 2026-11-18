@@ -1,8 +1,88 @@
 import {
+  authEvents,
   parseAuthLog,
   parseWhois,
   serverWarnings,
+  sshHistory,
 } from './server-status.controller';
+
+describe('sshHistory', () => {
+  const line = (iso: string, pid: number, msg: string) =>
+    `${iso}.000000+00:00 yay sshd[${pid}]: ${msg}`;
+  const log = [
+    // 10 days ago (WIB 08 Nov): one bot attempt, reusing pid 7
+    line(
+      '2026-11-08T05:00:00',
+      7,
+      'Failed password for root from 9.9.9.9 port 1 ssh2',
+    ),
+    // 3 days ago
+    line(
+      '2026-11-15T05:00:00',
+      8,
+      'Connection closed by authenticating user admin 8.8.8.8 port 2 [preauth]',
+    ),
+    // 5 hours ago, same pid 7 as above but a different connection
+    line('2026-11-18T00:00:00', 7, 'Invalid user oracle from 8.8.8.8 port 3'),
+    line(
+      '2026-11-18T00:00:01',
+      7,
+      'Failed password for invalid user oracle from 8.8.8.8 port 3 ssh2',
+    ),
+    // 30 minutes ago
+    line(
+      '2026-11-18T04:30:00',
+      9,
+      'Disconnected from invalid user test 7.7.7.7 port 4 [preauth]',
+    ),
+    line(
+      '2026-11-18T04:40:00',
+      10,
+      'Accepted publickey for root from 3.3.3.3 port 5 ssh2: ED25519 SHA256:x',
+    ),
+  ].join('\n');
+  const h = sshHistory(authEvents(log), Date.parse('2026-11-18T05:00:00Z'));
+
+  it('counts each window separately, one attempt per connection', () => {
+    expect(h.log_since).toBe('2026-11-08T05:00:00.000Z');
+    expect([
+      h.windows['30d'].failed,
+      h.windows['7d'].failed,
+      h.windows['24h'].failed,
+      h.windows['1h'].failed,
+    ]).toEqual([4, 3, 2, 1]);
+    expect(h.windows['30d'].ips).toBe(3);
+    expect(h.windows['30d'].top_failed[0]).toMatchObject({
+      ip: '8.8.8.8',
+      count: 2,
+    });
+    expect(h.windows['1h'].logins).toBe(1);
+  });
+
+  it('lists every attempt of the last hour with the username tried', () => {
+    expect(h.failed_1h).toEqual([
+      { at: '2026-11-18T04:30:00.000000+00:00', ip: '7.7.7.7', user: 'test' },
+    ]);
+    expect(h.logins_24h).toEqual([
+      {
+        at: '2026-11-18T04:40:00.000000+00:00',
+        ip: '3.3.3.3',
+        user: 'root',
+        method: 'publickey',
+      },
+    ]);
+  });
+
+  it('buckets per WIB day, newest first, 30 days long', () => {
+    expect(h.daily).toHaveLength(30);
+    expect(h.daily[0]).toEqual({ date: '2026-11-18', failed: 2, logins: 1 });
+    expect(h.daily.find((d) => d.date === '2026-11-08')).toEqual({
+      date: '2026-11-08',
+      failed: 1,
+      logins: 0,
+    });
+  });
+});
 
 describe('parseWhois', () => {
   it('takes country and org-name from a RIPE record', () => {
