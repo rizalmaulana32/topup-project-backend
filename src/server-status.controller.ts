@@ -47,10 +47,12 @@ export interface ServerStatus {
 
 export interface SshActivity {
   failed_1h: number;
-  top_failed: { ip: string; count: number }[];
+  /** `first`/`last`: timestamps of the IP's first and last attempt in the window. */
+  top_failed: { ip: string; count: number; first: string; last: string }[];
   banned: number | null;
-  /** Grouped per user+IP+method; `at` is the latest one. */
+  /** Grouped per user+IP+method; `first`..`at` spans them, `at` is the latest. */
   logins: {
+    first: string;
     at: string;
     user: string;
     ip: string;
@@ -127,7 +129,7 @@ export function parseAuthLog(
   text: string,
   sinceMs: number,
 ): Omit<SshActivity, 'banned' | 'origins'> {
-  const failedPid = new Map<string, string>();
+  const failedPid = new Map<string, { ip: string; at: string }>();
   const logins = new Map<string, SshActivity['logins'][number]>();
   for (const line of text.split('\n')) {
     const m = SSHD_LINE.exec(line);
@@ -138,20 +140,34 @@ export function parseAuthLog(
       const [, method, user, ip] = ok;
       const key = `${user} ${ip} ${method}`;
       const prev = logins.get(key);
-      logins.set(key, { at, user, ip, method, count: (prev?.count ?? 0) + 1 });
+      logins.set(key, {
+        first: prev?.first ?? at,
+        at,
+        user,
+        ip,
+        method,
+        count: (prev?.count ?? 0) + 1,
+      });
       continue;
     }
     const bad = FAILED.exec(msg);
-    if (bad) failedPid.set(pid, bad[1]);
+    if (bad && !failedPid.has(pid)) failedPid.set(pid, { ip: bad[1], at });
   }
-  const perIp = new Map<string, number>();
-  for (const ip of failedPid.values()) perIp.set(ip, (perIp.get(ip) ?? 0) + 1);
+  const perIp = new Map<string, SshActivity['top_failed'][number]>();
+  for (const { ip, at } of failedPid.values()) {
+    const prev = perIp.get(ip);
+    perIp.set(ip, {
+      ip,
+      count: (prev?.count ?? 0) + 1,
+      first: prev?.first ?? at,
+      last: at,
+    });
+  }
   return {
     failed_1h: failedPid.size,
-    top_failed: [...perIp]
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 3)
-      .map(([ip, count]) => ({ ip, count })),
+    top_failed: [...perIp.values()]
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 3),
     logins: [...logins.values()],
   };
 }

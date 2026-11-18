@@ -55,11 +55,22 @@ describe('parseAuthLog', () => {
     const r = parseAuthLog(log, Date.parse('2026-11-18T02:00:00Z'));
     expect(r.failed_1h).toBe(5);
     expect(r.top_failed).toEqual([
-      { ip: '1.1.1.1', count: 3 },
-      { ip: '2.2.2.2', count: 2 },
+      {
+        ip: '1.1.1.1',
+        count: 3,
+        first: '2026-11-18T02:10:00.000000+00:00',
+        last: '2026-11-18T02:16:00.000000+00:00',
+      },
+      {
+        ip: '2.2.2.2',
+        count: 2,
+        first: '2026-11-18T02:11:00.000000+00:00',
+        last: '2026-11-18T02:15:00.000000+00:00',
+      },
     ]);
     expect(r.logins).toEqual([
       {
+        first: '2026-11-18T02:12:00.000000+00:00',
         at: '2026-11-18T02:20:00.000000+00:00',
         method: 'publickey',
         user: 'root',
@@ -67,6 +78,7 @@ describe('parseAuthLog', () => {
         count: 2,
       },
       {
+        first: '2026-11-18T02:13:00.000000+00:00',
         at: '2026-11-18T02:13:00.000000+00:00',
         method: 'password',
         user: 'root',
@@ -101,7 +113,14 @@ describe('serverWarnings', () => {
       top_failed: [],
       banned: 4,
       logins: [
-        { at: '', user: 'root', ip: '3.3.3.3', method: 'publickey', count: 1 },
+        {
+          first: '',
+          at: '',
+          user: 'root',
+          ip: '3.3.3.3',
+          method: 'publickey',
+          count: 1,
+        },
       ],
     },
   };
@@ -128,6 +147,7 @@ describe('serverWarnings', () => {
           ...healthy.ssh,
           logins: [
             {
+              first: '',
               at: '',
               user: 'root',
               ip: '4.4.4.4',
