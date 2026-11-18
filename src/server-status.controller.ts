@@ -10,7 +10,7 @@ import { ApiExcludeController } from '@nestjs/swagger';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { execFile } from 'node:child_process';
 import { timingSafeEqual, X509Certificate } from 'node:crypto';
-import { readdir, readFile, stat, statfs } from 'node:fs/promises';
+import { open, readdir, readFile, stat, statfs } from 'node:fs/promises';
 import { cpus, loadavg, uptime } from 'node:os';
 import { promisify } from 'node:util';
 import { DataSource } from 'typeorm';
@@ -40,7 +40,67 @@ export interface ServerStatus {
   top_processes: { name: string; rss_mb: number }[];
   certificates: { domain: string; days_left: number }[];
   last_backup_hours: number | null;
+  ssh: SshActivity;
   warnings: string[];
+}
+
+export interface SshActivity {
+  failed_1h: number;
+  top_failed: { ip: string; count: number }[];
+  banned: number | null;
+  /** Grouped per user+IP+method; `at` is the latest one. */
+  logins: {
+    at: string;
+    user: string;
+    ip: string;
+    method: string;
+    count: number;
+  }[];
+}
+
+const SSHD_LINE = /^(\S+) \S+ sshd(?:-session)?\[(\d+)\]: (.*)$/;
+const ACCEPTED = /^Accepted (\S+) for (\S+) from (\S+) port/;
+// With password auth off, bots show up as "Connection closed by authenticating user ..."
+// rather than "Failed password"; both forms (and invalid users) count as a failed attempt.
+const FAILED =
+  /^(?:Failed \S+ for (?:invalid user )?\S+ from|Invalid user .*?from|(?:Connection closed by|Connection reset by|Disconnected from) (?:authenticating|invalid) user \S+) (\S+) port/;
+
+/**
+ * Failed attempts and successful logins in auth.log since `sinceMs`. One SSH
+ * connection (one sshd pid) logs several failure lines, so attempts are counted
+ * per pid, not per line.
+ */
+export function parseAuthLog(
+  text: string,
+  sinceMs: number,
+): Omit<SshActivity, 'banned'> {
+  const failedPid = new Map<string, string>();
+  const logins = new Map<string, SshActivity['logins'][number]>();
+  for (const line of text.split('\n')) {
+    const m = SSHD_LINE.exec(line);
+    if (!m || !(Date.parse(m[1]) >= sinceMs)) continue;
+    const [, at, pid, msg] = m;
+    const ok = ACCEPTED.exec(msg);
+    if (ok) {
+      const [, method, user, ip] = ok;
+      const key = `${user} ${ip} ${method}`;
+      const prev = logins.get(key);
+      logins.set(key, { at, user, ip, method, count: (prev?.count ?? 0) + 1 });
+      continue;
+    }
+    const bad = FAILED.exec(msg);
+    if (bad) failedPid.set(pid, bad[1]);
+  }
+  const perIp = new Map<string, number>();
+  for (const ip of failedPid.values()) perIp.set(ip, (perIp.get(ip) ?? 0) + 1);
+  return {
+    failed_1h: failedPid.size,
+    top_failed: [...perIp]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 3)
+      .map(([ip, count]) => ({ ip, count })),
+    logins: [...logins.values()],
+  };
 }
 
 /** What the hourly Telegram report flags with ⚠️. */
@@ -74,6 +134,11 @@ export function serverWarnings(s: Omit<ServerStatus, 'warnings'>): string[] {
     if (c.days_left < 14)
       w.push(`SSL ${c.domain} habis ${c.days_left} hari lagi`);
   }
+  // Password login is disabled in sshd; one succeeding means that was undone.
+  for (const l of s.ssh.logins) {
+    if (l.method !== 'publickey')
+      w.push(`Login SSH pakai ${l.method} berhasil: ${l.user} dari ${l.ip}`);
+  }
   return w;
 }
 
@@ -102,17 +167,27 @@ export class ServerStatusController {
       throw new ForbiddenException();
     }
 
-    const [usage, mem, disk, services, database, top, certificates, backup] =
-      await Promise.all([
-        cpuUsagePercent(),
-        meminfo(),
-        statfs('/'),
-        serviceStates(['postgresql', 'nginx']),
-        this.database(),
-        topProcesses(),
-        certificateDays(),
-        lastBackupHours(),
-      ]);
+    const [
+      usage,
+      mem,
+      disk,
+      services,
+      database,
+      top,
+      certificates,
+      backup,
+      ssh,
+    ] = await Promise.all([
+      cpuUsagePercent(),
+      meminfo(),
+      statfs('/'),
+      serviceStates(['postgresql', 'nginx', 'fail2ban']),
+      this.database(),
+      topProcesses(),
+      certificateDays(),
+      lastBackupHours(),
+      sshActivity(),
+    ]);
     const diskTotal = disk.blocks * disk.bsize;
     const diskFree = disk.bavail * disk.bsize;
     const status = {
@@ -143,6 +218,7 @@ export class ServerStatusController {
       top_processes: top,
       certificates,
       last_backup_hours: backup,
+      ssh,
     };
     return { ...status, warnings: serverWarnings(status) };
   }
@@ -249,6 +325,36 @@ async function certificateDays() {
   } catch {
     return [];
   }
+}
+
+/** SSH activity of the last hour from the tail of auth.log, plus fail2ban's ban count. */
+async function sshActivity(): Promise<SshActivity> {
+  // ponytail: reads only the last 4 MB (~hours of bot noise) and the current file; an hour
+  // spanning logrotate loses the part in auth.log.1.
+  let text = '';
+  try {
+    const fh = await open('/var/log/auth.log', 'r');
+    try {
+      const { size } = await fh.stat();
+      const start = Math.max(0, size - 4 * MB);
+      const buf = Buffer.alloc(size - start);
+      await fh.read(buf, 0, buf.length, start);
+      text = buf.toString('utf8');
+    } finally {
+      await fh.close();
+    }
+  } catch {
+    // no auth.log: report zeros rather than fail the whole status
+  }
+  let banned: number | null = null;
+  try {
+    const { stdout } = await run('fail2ban-client', ['status', 'sshd']);
+    const m = /Currently banned:\s*(\d+)/.exec(stdout);
+    banned = m ? Number(m[1]) : null;
+  } catch {
+    // fail2ban not installed/running; its service state already shows that
+  }
+  return { ...parseAuthLog(text, Date.now() - 3600000), banned };
 }
 
 /** Hours since the newest file in /root/backups (manual pre-deploy dumps). */
