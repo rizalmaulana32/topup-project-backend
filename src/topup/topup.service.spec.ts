@@ -527,6 +527,7 @@ describe('TopupService', () => {
         targetUserId: '1',
         targetZoneId: '99',
         coin: 225,
+        refId: 'TRX-20260805-0021',
       });
       expect(creditRevenueMock).toHaveBeenCalledWith({
         transactionId: 'TRX-20260805-0021',
@@ -632,6 +633,7 @@ describe('TopupService', () => {
         targetUserId: '1',
         targetZoneId: '99',
         coin: 120,
+        refId: 'TRX-20260805-0001',
       });
       expect(transactionsService.markProviderResult).toHaveBeenCalledWith(
         'TRX-20260805-0001',

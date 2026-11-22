@@ -102,6 +102,9 @@ export class MomoProviderTopUpService implements ProviderTopUpPort {
       return {
         success: true,
         response: JSON.stringify(result),
+        // ponytail: assumes surplus_coin is the merchant's balance after the
+        // transfer (not the player's); if not, call getBalance() here instead.
+        balanceAfter: result.surplus_coin,
       };
     } catch (error) {
       return {

@@ -10,6 +10,7 @@ import { SettingsModule } from '../settings/settings.module';
 import { TopupModule } from '../topup/topup.module';
 import { TransactionsModule } from '../transactions/transactions.module';
 import { AdminController } from './admin.controller';
+import { CoinSendDetailService } from './coin-send-detail.service';
 
 @Module({
   imports: [
@@ -25,5 +26,6 @@ import { AdminController } from './admin.controller';
     BonusTiersModule,
   ],
   controllers: [AdminController],
+  providers: [CoinSendDetailService],
 })
 export class AdminModule {}

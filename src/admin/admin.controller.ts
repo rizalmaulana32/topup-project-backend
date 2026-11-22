@@ -51,6 +51,11 @@ import { BonusTier } from '../bonus-tiers/entities/bonus-tier.entity';
 import { ContactService } from '../contact/contact.service';
 import { LinkQuService } from '../linkqu/linkqu.service';
 import { PlatformService } from '../platform/platform.service';
+import { CoinSendGuard } from '../provider/coin-send-guard.service';
+import {
+  CoinSend,
+  MANUAL_COIN_SEND_SOURCES,
+} from '../provider/entities/coin-send.entity';
 import { PROVIDER_TOP_UP_PORT } from '../provider/provider-top-up.port';
 import type {
   CheckIdResult,
@@ -66,6 +71,9 @@ import { ApproveAffiliateDto } from './dto/approve-affiliate.dto';
 import { CommissionSummaryDto } from './dto/commission-summary.dto';
 import { CreateBonusTierDto } from './dto/create-bonus-tier.dto';
 import { ListAffiliatesDto } from './dto/list-affiliates.dto';
+import { CoinSendDetailService } from './coin-send-detail.service';
+import { CoinSendChartDto } from './dto/coin-send-chart.dto';
+import { ListCoinSendsDto } from './dto/list-coin-sends.dto';
 import { ListContactMessagesDto } from './dto/list-contact-messages.dto';
 import { ListPlatformWithdrawalsDto } from '../platform/dto/list-platform-withdrawals.dto';
 import { ListTransactionsDto } from './dto/list-transactions.dto';
@@ -106,6 +114,8 @@ export class AdminController {
     private readonly topupService: TopupService,
     private readonly configService: ConfigService,
     private readonly bonusTiersService: BonusTiersService,
+    private readonly coinSendGuard: CoinSendGuard,
+    private readonly coinSendDetailService: CoinSendDetailService,
   ) {}
 
   @Get('affiliates')
@@ -936,6 +946,60 @@ export class AdminController {
     return { success: true, data: { balance } };
   }
 
+  @Get('provider/coin-sends/chart')
+  @ApiOperation({
+    summary:
+      'Successful coin sends for a chart, split linkqu/manual: per hour when date_from = date_to (default: today, Asia/Jakarta), per day otherwise (max 366 days). Empty buckets are 0.',
+  })
+  async coinSendChart(@Query() query: CoinSendChartDto) {
+    const today = new Date().toLocaleDateString('sv-SE', {
+      timeZone: 'Asia/Jakarta',
+    });
+    const { dateFrom, dateTo } = toDateRange(query) ?? {
+      dateFrom: today,
+      dateTo: today,
+    };
+    return {
+      success: true,
+      data: await this.coinSendGuard.successChart(dateFrom, dateTo),
+    };
+  }
+
+  @Get('provider/coin-sends')
+  @ApiOperation({
+    summary:
+      'Every coin send to MomoLive, newest first: coin sent, merchant balance before/after (null when unknown or failed), split by channel (linkqu = paid checkout, manual = manual top-up or admin transfer). date_from/date_to as in the chart (inclusive, Asia/Jakarta); omitted = all time.',
+  })
+  async listCoinSends(@Query() query: ListCoinSendsDto) {
+    const limit = query.limit ?? 20;
+    const offset = query.offset ?? 0;
+    const [rows, total] = await this.coinSendGuard.list({
+      channel: query.channel,
+      status: query.status,
+      range: toDateRange(query),
+      limit,
+      offset,
+    });
+    return {
+      success: true,
+      data: { items: rows.map(toCoinSendItem), total, limit, offset },
+    };
+  }
+
+  @Get('provider/coin-sends/:id')
+  @ApiOperation({
+    summary:
+      "One coin send with everything behind it: the list item's fields, the buyer's Momo username, the LinkQu transaction or manual top-up it was for, who triggered it (admin), the referral affiliate with their current upline (admin / super affiliate), and the commission credited for it. Sends from before ref_id existed only have the list fields.",
+  })
+  async getCoinSend(@Param('id') id: string) {
+    // Not a bigint id = no such send (404, not 400 or a Postgres out-of-range 500).
+    if (!/^\d{1,18}$/.test(id)) {
+      throw new NotFoundException(`Coin send ${id} not found`);
+    }
+    const { send, detail } = await this.coinSendDetailService.findOne(id);
+    return { success: true, data: { ...toCoinSendItem(send), ...detail } };
+  }
+
   @Get('linkqu/balance')
   @ApiOperation({
     summary:
@@ -980,6 +1044,8 @@ export class AdminController {
       targetUserId: dto.target_user_id,
       targetZoneId: dto.target_zone_id,
       coin: dto.coin,
+      adminId: request.user.id,
+      reason: dto.reason,
     });
     if (result.duplicate) {
       throw new ConflictException(result.response);
@@ -1091,6 +1157,45 @@ export class AdminController {
       },
     };
   }
+}
+
+/** Inclusive YYYY-MM-DD (Asia/Jakarta); only one side given = that single day. */
+function toDateRange(query: CoinSendChartDto) {
+  const dateFrom = query.date_from ?? query.date_to;
+  if (!dateFrom) return undefined;
+  const dateTo = query.date_to ?? dateFrom;
+  if (dateFrom > dateTo) {
+    throw new BadRequestException('date_from must not be after date_to');
+  }
+  if (Date.parse(dateTo) - Date.parse(dateFrom) > 365 * 86_400_000) {
+    throw new BadRequestException('Date range must be at most 366 days');
+  }
+  return { dateFrom, dateTo };
+}
+
+function toCoinSendItem(send: CoinSend) {
+  return {
+    id: send.id,
+    created_at: send.createdAt,
+    channel: MANUAL_COIN_SEND_SOURCES.includes(send.source)
+      ? 'manual'
+      : 'linkqu',
+    source: send.source,
+    ref_id: send.refId,
+    // LinkQu: TRX id; manual top-up: its MTU id (ref_id minus "#sendId"); admin transfer / pre-ref_id rows: null.
+    transaction_id: send.refId?.split('#')[0] ?? null,
+    target_user_id: send.targetUserId,
+    coin: send.coin,
+    status: send.status,
+    balance_before:
+      send.balanceAfter === null
+        ? null
+        : (Number(send.balanceAfter) + Number(send.coin)).toFixed(2),
+    balance_after: send.balanceAfter,
+    admin_id: send.adminId,
+    reason: send.reason,
+    provider_response: send.providerResponse,
+  };
 }
 
 /** One withdrawal as GET /admin/withdrawals returns it (also the export's rows). */

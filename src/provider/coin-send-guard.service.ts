@@ -1,7 +1,21 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, EntityManager, MoreThan, Not, Repository } from 'typeorm';
-import { CoinSend } from './entities/coin-send.entity';
+import {
+  And,
+  DataSource,
+  EntityManager,
+  In,
+  LessThan,
+  MoreThan,
+  MoreThanOrEqual,
+  Not,
+  Repository,
+} from 'typeorm';
+import {
+  CoinSend,
+  CoinSendStatus,
+  MANUAL_COIN_SEND_SOURCES,
+} from './entities/coin-send.entity';
 import type {
   InjectCoinParams,
   InjectCoinResult,
@@ -39,6 +53,103 @@ export class CoinSendGuard {
     );
   }
 
+  /** Newest first; channel splits LinkQu checkouts from manual sends. */
+  list(filter: {
+    channel?: 'linkqu' | 'manual';
+    status?: CoinSendStatus;
+    /** Inclusive YYYY-MM-DD, Asia/Jakarta. */
+    range?: { dateFrom: string; dateTo: string };
+    limit: number;
+    offset: number;
+  }): Promise<[CoinSend[], number]> {
+    // WIB is a fixed UTC+7 (no DST), so midnight is a plain offset.
+    const midnight = (date: string, plusDays = 0) =>
+      new Date(Date.parse(`${date}T00:00:00+07:00`) + plusDays * 86_400_000);
+    return this.coinSendRepository.findAndCount({
+      where: {
+        ...(filter.range && {
+          createdAt: And(
+            MoreThanOrEqual(midnight(filter.range.dateFrom)),
+            LessThan(midnight(filter.range.dateTo, 1)),
+          ),
+        }),
+        ...(filter.channel && {
+          source:
+            filter.channel === 'manual'
+              ? In(MANUAL_COIN_SEND_SOURCES)
+              : Not(In(MANUAL_COIN_SEND_SOURCES)),
+        }),
+        ...(filter.status && { status: filter.status }),
+      },
+      order: { createdAt: 'DESC', id: 'DESC' },
+      take: filter.limit,
+      skip: filter.offset,
+    });
+  }
+
+  /**
+   * Successful sends per Jakarta hour (one-day range) or day, every bucket
+   * present even when empty. Dates are inclusive YYYY-MM-DD.
+   */
+  async successChart(dateFrom: string, dateTo: string) {
+    const bucket = dateFrom === dateTo ? 'hour' : 'day';
+    const rows: {
+      bucket: string;
+      linkqu_coin: string;
+      linkqu_count: string;
+      manual_coin: string;
+      manual_count: string;
+    }[] = await this.dataSource.query(
+      `SELECT to_char(g.b, $4) AS bucket,
+         COALESCE(SUM(s.coin) FILTER (WHERE s.source <> ALL($5)), 0) AS linkqu_coin,
+         COUNT(s.id) FILTER (WHERE s.source <> ALL($5)) AS linkqu_count,
+         COALESCE(SUM(s.coin) FILTER (WHERE s.source = ANY($5)), 0) AS manual_coin,
+         COUNT(s.id) FILTER (WHERE s.source = ANY($5)) AS manual_count
+       FROM generate_series($1::date::timestamp,
+              $2::date::timestamp + interval '1 day' - $3::interval,
+              $3::interval) AS g(b)
+       LEFT JOIN coin_sends s
+         ON s.status = 'success'
+        AND s.created_at >= g.b AT TIME ZONE 'Asia/Jakarta'
+        AND s.created_at < (g.b + $3::interval) AT TIME ZONE 'Asia/Jakarta'
+       GROUP BY g.b
+       ORDER BY g.b`,
+      [
+        dateFrom,
+        dateTo,
+        `1 ${bucket}`,
+        bucket === 'hour' ? 'YYYY-MM-DD"T"HH24:00' : 'YYYY-MM-DD',
+        MANUAL_COIN_SEND_SOURCES,
+      ],
+    );
+    const points = rows.map((row) => ({
+      bucket: row.bucket,
+      linkqu_coin: Number(row.linkqu_coin),
+      linkqu_count: Number(row.linkqu_count),
+      manual_coin: Number(row.manual_coin),
+      manual_count: Number(row.manual_count),
+    }));
+    const sum = (key: Exclude<keyof (typeof points)[number], 'bucket'>) =>
+      points.reduce((total, point) => total + point[key], 0);
+    const totals = {
+      linkqu_coin: sum('linkqu_coin'),
+      linkqu_count: sum('linkqu_count'),
+      manual_coin: sum('manual_coin'),
+      manual_count: sum('manual_count'),
+    };
+    return {
+      date_from: dateFrom,
+      date_to: dateTo,
+      bucket,
+      totals: {
+        ...totals,
+        coin: totals.linkqu_coin + totals.manual_coin,
+        count: totals.linkqu_count + totals.manual_count,
+      },
+      points,
+    };
+  }
+
   wrap(inner: ProviderTopUpPort): ProviderTopUpPort {
     return {
       checkId: (gameCode, targetUserId, targetZoneId) =>
@@ -70,6 +181,9 @@ export class CoinSendGuard {
           coin: params.coin.toFixed(2),
           status: 'pending',
           source: params.productProviderCode,
+          refId: params.refId ?? null,
+          adminId: params.adminId ?? null,
+          reason: params.reason ?? null,
         }),
       );
       return row.id;
@@ -88,7 +202,11 @@ export class CoinSendGuard {
     try {
       result = await inner.injectCoin(params);
     } catch (error) {
-      await this.coinSendRepository.update(logId, { status: 'unknown' });
+      await this.coinSendRepository.update(logId, {
+        status: 'unknown',
+        providerResponse:
+          error instanceof Error ? error.message : String(error),
+      });
       throw error;
     }
     await this.coinSendRepository.update(logId, {
@@ -97,6 +215,11 @@ export class CoinSendGuard {
         : result.rejected
           ? 'rejected'
           : 'unknown',
+      providerResponse: result.response,
+      balanceAfter:
+        result.success && result.balanceAfter != null
+          ? result.balanceAfter.toFixed(2)
+          : null,
     });
     return result;
   }

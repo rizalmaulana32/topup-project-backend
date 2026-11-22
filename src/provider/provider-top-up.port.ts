@@ -12,6 +12,11 @@ export interface InjectCoinParams {
   coin: number;
   /** Skip the duplicate-send guard - only for later installments of one manual schedule. */
   allowRepeat?: boolean;
+  /** Stored as coin_sends.ref_id - see CoinSend.refId. */
+  refId?: string;
+  /** Audit trail in coin_sends for admin-initiated transfers. */
+  adminId?: string;
+  reason?: string;
 }
 
 export interface InjectCoinResult {
@@ -21,6 +26,8 @@ export interface InjectCoinResult {
   /** Blocked by CoinSendGuard (same ID + amount sent recently); implies rejected. */
   duplicate?: boolean;
   response: string;
+  /** Merchant's remaining coin balance after a successful send, when the vendor reports it. */
+  balanceAfter?: number;
 }
 
 /**

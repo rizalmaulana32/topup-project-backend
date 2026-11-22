@@ -292,6 +292,7 @@ export class TopupService {
       targetUserId: transaction.targetUserId,
       targetZoneId: transaction.targetZoneId,
       coin,
+      refId: transaction.id,
     });
 
     await this.transactionsService.markProviderResult(transaction.id, {

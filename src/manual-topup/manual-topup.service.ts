@@ -830,6 +830,7 @@ export class ManualTopupService {
         coin: amount,
         // Later installments of this same schedule repeat the amount on purpose.
         allowRepeat: Number(manualTopup.amountSent) > 0,
+        refId: manualTopupSendKey(manualTopup.id, send.id),
       });
     } catch (error) {
       result = {
