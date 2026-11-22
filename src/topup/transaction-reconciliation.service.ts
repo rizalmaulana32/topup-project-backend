@@ -1,6 +1,9 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
-import { LinkQuService } from '../linkqu/linkqu.service';
+import {
+  LINKQU_INVOICE_EXPIRY_MS,
+  LinkQuService,
+} from '../linkqu/linkqu.service';
 import { TransactionsService } from '../transactions/transactions.service';
 import { TopupService } from './topup.service';
 
@@ -27,7 +30,6 @@ import { TopupService } from './topup.service';
  * transaction even if it runs at the same moment a real webhook finally
  * arrives.
  */
-const LINKQU_INVOICE_EXPIRY_MS = 24 * 60 * 60 * 1000;
 
 @Injectable()
 export class TransactionReconciliationService {

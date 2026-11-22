@@ -355,6 +355,7 @@ describe('TopupService', () => {
     it('pays out 1:1 (no bonus, no cut) below the lowest published tier, creates a pending transaction, and requests a LinkQu payment link for the full nominal amount', async () => {
       transactionsService.createPendingCustomAmount.mockResolvedValue({
         id: 'TRX-20260805-0020',
+        createdAt: new Date('2026-08-05T03:00:00Z'),
       } as any);
       linkQuService.createInvoice.mockResolvedValue({
         invoiceId: '800',
@@ -384,6 +385,8 @@ describe('TopupService', () => {
         externalId: 'TRX-20260805-0020',
         amount: 25000,
         description: 'Top-up 25175 coin for 1',
+        // 24h after the transaction row - the same deadline the customer sees.
+        expiresAt: new Date('2026-08-06T03:00:00Z'),
       });
       expect(result).toEqual({
         transaction_id: 'TRX-20260805-0020',
@@ -392,12 +395,14 @@ describe('TopupService', () => {
         extra_coin: 175,
         linkqu_reference: '800',
         invoice_url: 'https://cognos.linkqu.id/pay/custom-amount-test',
+        expired_at: new Date('2026-08-06T03:00:00Z'),
       });
     });
 
     it('applies the published bonus tier for a qualifying amount', async () => {
       transactionsService.createPendingCustomAmount.mockResolvedValue({
         id: 'TRX-20260805-0025',
+        createdAt: new Date('2026-08-05T03:00:00Z'),
       } as any);
       linkQuService.createInvoice.mockResolvedValue({
         invoiceId: '802',
@@ -428,6 +433,7 @@ describe('TopupService', () => {
       } as any);
       transactionsService.createPendingCustomAmount.mockResolvedValue({
         id: 'TRX-20260805-0030',
+        createdAt: new Date('2026-08-05T03:00:00Z'),
       } as any);
       linkQuService.createInvoice.mockResolvedValue({
         invoiceId: '801',
@@ -459,6 +465,7 @@ describe('TopupService', () => {
       } as any);
       transactionsService.createPendingCustomAmount.mockResolvedValue({
         id: 'TRX-20261105-0001',
+        createdAt: new Date('2026-08-05T03:00:00Z'),
       } as any);
       linkQuService.createInvoice.mockResolvedValue({
         invoiceId: '900',

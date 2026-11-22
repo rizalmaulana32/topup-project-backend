@@ -142,4 +142,36 @@ describe('LinkQuService', () => {
       expect(result.responseDesc).toContain('Totally Unknown Bank');
     });
   });
+
+  describe('createInvoice', () => {
+    afterEach(() => jest.restoreAllMocks());
+
+    it('sends expired as WIB yyyyMMddHHmmss, whatever the server TZ', async () => {
+      const fetchMock = jest.spyOn(global, 'fetch').mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: () =>
+          Promise.resolve({
+            rc: '00',
+            data: {
+              'payment-request': { id: 1, partnerReff: 'TRX-1' },
+              'payment-url': 'https://pay.example/1',
+            },
+          }),
+      } as Response);
+
+      await buildService(env).createInvoice({
+        externalId: 'TRX-1',
+        amount: 10000,
+        description: 'Top-up',
+        // 23:30 UTC = 06:30 WIB the next day.
+        expiresAt: new Date('2026-11-21T23:30:00Z'),
+      });
+
+      const body = JSON.parse(fetchMock.mock.calls[0][1]!.body as string) as {
+        expired: string;
+      };
+      expect(body.expired).toBe('20261122063000');
+    });
+  });
 });

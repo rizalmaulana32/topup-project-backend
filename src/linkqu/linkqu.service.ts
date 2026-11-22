@@ -6,10 +6,18 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { createHmac, timingSafeEqual } from 'crypto';
 
+/** How long a Payment Link stays payable: its LinkQu `expired`, the customer's expired_at, and when reconciliation gives up. */
+export const LINKQU_INVOICE_EXPIRY_MS = 24 * 60 * 60 * 1000;
+
+export const invoiceExpiresAt = (createdAt: Date) =>
+  new Date(createdAt.getTime() + LINKQU_INVOICE_EXPIRY_MS);
+
 export interface CreateInvoiceParams {
   externalId: string;
   amount: number;
   description: string;
+  /** See invoiceExpiresAt - pass that, so the customer's countdown matches LinkQu. */
+  expiresAt: Date;
   payerEmail?: string;
 }
 
@@ -248,17 +256,13 @@ export class LinkQuService {
   /**
    * Creates a LinkQu Payment Link and returns its hosted checkout URL -
    * direct replacement for Duitku's createInvoice/paymentUrl. expired is
-   * required by LinkQu (format yyyyMMddHHiiss); defaults to 24h from now
-   * since the previous Duitku flow had no separate expiry concept exposed
-   * to callers.
+   * required by LinkQu (format yyyyMMddHHiiss, WIB).
    */
   async createInvoice(
     params: CreateInvoiceParams,
   ): Promise<CreateInvoiceResult> {
     const path = '/member/payment-request/create';
-    const expired = formatLinkQuDatetime(
-      new Date(Date.now() + 24 * 60 * 60 * 1000),
-    );
+    const expired = formatLinkQuDatetime(params.expiresAt);
     const customerName = params.description.slice(0, 50) || 'Customer';
 
     const signature = this.sign(path, 'POST', [
@@ -658,13 +662,8 @@ function deriveLinkQuBankCode(bankName: string): string {
 
 /** LinkQu's documented DateTimeFormat: yyyyMMddHHiiss */
 function formatLinkQuDatetime(date: Date): string {
-  const pad = (n: number) => String(n).padStart(2, '0');
-  return (
-    date.getFullYear().toString() +
-    pad(date.getMonth() + 1) +
-    pad(date.getDate()) +
-    pad(date.getHours()) +
-    pad(date.getMinutes()) +
-    pad(date.getSeconds())
-  );
+  // WIB whatever the server's TZ: a UTC server used to send times 7h early.
+  return date
+    .toLocaleString('sv-SE', { timeZone: 'Asia/Jakarta' })
+    .replace(/\D/g, '');
 }

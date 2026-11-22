@@ -19,7 +19,7 @@ import { SettingsService } from '../settings/settings.service';
 import type { PlatformSettings } from '../settings/entities/platform-settings.entity';
 import { SuperAffiliatesService } from '../super-affiliates/super-affiliates.service';
 import { TransactionsService } from '../transactions/transactions.service';
-import { LinkQuService } from '../linkqu/linkqu.service';
+import { invoiceExpiresAt, LinkQuService } from '../linkqu/linkqu.service';
 import { CheckIdDto } from './dto/check-id.dto';
 import { CheckoutCustomAmountDto } from './dto/checkout-custom-amount.dto';
 import { EstimateCustomAmountDto } from './dto/estimate-custom-amount.dto';
@@ -214,10 +214,12 @@ export class TopupService {
         referralCode: dto.affiliate_code,
       });
 
+    const expiresAt = invoiceExpiresAt(transaction.createdAt);
     const invoice = await this.linkQuService.createInvoice({
       externalId: transaction.id,
       amount: dto.amount,
       description: `Top-up ${coinAmount} coin for ${dto.target_user_id}`,
+      expiresAt,
     });
 
     await this.transactionsService.attachLinkQuReference(
@@ -232,6 +234,7 @@ export class TopupService {
       extra_coin: extraCoin,
       linkqu_reference: invoice.invoiceId,
       invoice_url: invoice.invoiceUrl,
+      expired_at: expiresAt,
     };
   }
 
