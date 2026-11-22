@@ -4,15 +4,18 @@ import {
   Get,
   Headers,
   NotFoundException,
+  Query,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { ApiExcludeController } from '@nestjs/swagger';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { execFile } from 'node:child_process';
 import { timingSafeEqual, X509Certificate } from 'node:crypto';
-import { readdir, readFile, stat, statfs } from 'node:fs/promises';
+import { open, readdir, readFile, stat, statfs } from 'node:fs/promises';
+import { isIP } from 'node:net';
 import { cpus, loadavg, uptime } from 'node:os';
 import { promisify } from 'node:util';
+import { gunzipSync } from 'node:zlib';
 import { DataSource } from 'typeorm';
 
 const run = promisify(execFile);
@@ -40,7 +43,314 @@ export interface ServerStatus {
   top_processes: { name: string; rss_mb: number }[];
   certificates: { domain: string; days_left: number }[];
   last_backup_hours: number | null;
+  ssh: SshActivity;
+  /** Only with ?history=1 (reads every auth.log rotation). */
+  ssh_history?: SshHistory;
   warnings: string[];
+}
+
+export interface SshActivity {
+  failed_1h: number;
+  /** `first`/`last`: timestamps of the IP's first and last attempt in the window. */
+  top_failed: { ip: string; count: number; first: string; last: string }[];
+  banned: number | null;
+  /** IPs fail2ban is blocking right now (sshd + recidive jails). */
+  banned_ips: string[];
+  /** Grouped per user+IP+method; `first`..`at` spans them, `at` is the latest. */
+  logins: {
+    first: string;
+    at: string;
+    user: string;
+    ip: string;
+    method: string;
+    count: number;
+  }[];
+  /** Whois summary ("US · SPARKED HOST LLC") per IP above; '' when unknown. */
+  origins: Record<string, string>;
+}
+
+const REGISTRY_PLACEHOLDER =
+  /^(?:APNIC|RIPE|ARIN|LACNIC|AFRINIC|IANA)\b|Coordination Centre|Information Centre/i;
+
+/**
+ * "COUNTRY · organisation" from raw whois output. Records start at each
+ * netname; registry referral stubs (e.g. ARIN pointing at APNIC) are skipped
+ * and the last real record wins.
+ */
+export function parseWhois(text: string): string {
+  const records: Record<string, string>[] = [];
+  for (const line of text.split('\n')) {
+    const m = /^([A-Za-z-]+):\s*(.*)$/.exec(line);
+    if (!m) continue;
+    const key = m[1].toLowerCase();
+    const value = m[2].trim();
+    if (key === 'netname') records.push({});
+    const r = records.at(-1);
+    if (r && value && !(key in r)) r[key] = value;
+  }
+  const r = records
+    .reverse()
+    .find(
+      (x) =>
+        !REGISTRY_PLACEHOLDER.test(x.netname ?? '') &&
+        !REGISTRY_PLACEHOLDER.test(x.orgname ?? ''),
+    );
+  if (!r) return '';
+  const org = (r['org-name'] ?? r.orgname ?? r.descr ?? r.netname).slice(0, 40);
+  return [r.country?.toUpperCase(), org].filter(Boolean).join(' · ');
+}
+
+// ponytail: in-process cache, lost on restart; IP owners rarely change
+const whoisCache = new Map<string, string>();
+
+async function ipOrigin(ip: string): Promise<string> {
+  if (!isIP(ip)) return '';
+  const hit = whoisCache.get(ip);
+  if (hit !== undefined) return hit;
+  let origin = '';
+  try {
+    const { stdout } = await run('whois', [ip], { timeout: 8000 });
+    origin = parseWhois(stdout);
+  } catch {
+    // whois missing or timed out: show the IP without origin
+  }
+  if (whoisCache.size > 500) whoisCache.clear();
+  whoisCache.set(ip, origin);
+  return origin;
+}
+
+const SSHD_LINE = /^(\S+) \S+ sshd(?:-session)?\[(\d+)\]: (.*)$/;
+const ACCEPTED = /^Accepted (\S+) for (\S+) from (\S+) port/;
+// With password auth off, bots show up as "Connection closed by authenticating user ..."
+// rather than "Failed password"; both forms (and invalid users) count as a failed attempt.
+// Groups: 1-3 = username tried (whichever form matched), 4 = IP.
+const FAILED =
+  /^(?:Failed \S+ for (?:invalid user )?(\S+) from|Invalid user (\S*) ?from|(?:Connection closed by|Connection reset by|Disconnected from) (?:authenticating|invalid) user (\S+)) (\S+) port/;
+
+export interface SshEvent {
+  at: string;
+  ms: number;
+  ip: string;
+  user: string;
+}
+export interface SshLoginEvent extends SshEvent {
+  method: string;
+}
+
+/**
+ * Every failed attempt and successful login in auth.log text, oldest first.
+ * One SSH connection logs several failure lines, so a failure is counted once
+ * per connection (sshd pid). Pids are reused over weeks while a connection
+ * lives seconds, so the key is pid + 10-minute bucket.
+ */
+export function authEvents(text: string): {
+  failed: SshEvent[];
+  logins: SshLoginEvent[];
+} {
+  // ponytail: a connection straddling a 10-minute boundary is counted twice
+  const failed = new Map<string, SshEvent>();
+  const logins: SshLoginEvent[] = [];
+  for (const line of text.split('\n')) {
+    const m = SSHD_LINE.exec(line);
+    if (!m) continue;
+    const [, at, pid, msg] = m;
+    const ms = Date.parse(at);
+    if (Number.isNaN(ms)) continue;
+    const ok = ACCEPTED.exec(msg);
+    if (ok) {
+      logins.push({ at, ms, method: ok[1], user: ok[2], ip: ok[3] });
+      continue;
+    }
+    const bad = FAILED.exec(msg);
+    const key = `${pid} ${at.slice(0, 15)}`;
+    if (bad && !failed.has(key)) {
+      failed.set(key, {
+        at,
+        ms,
+        ip: bad[4],
+        user: bad[1] ?? bad[2] ?? bad[3] ?? '',
+      });
+    }
+  }
+  return { failed: [...failed.values()], logins };
+}
+
+function topFailed(failed: SshEvent[], n: number) {
+  const perIp = new Map<string, SshActivity['top_failed'][number]>();
+  for (const { ip, at } of failed) {
+    const prev = perIp.get(ip);
+    perIp.set(ip, {
+      ip,
+      count: (prev?.count ?? 0) + 1,
+      first: prev?.first ?? at,
+      last: at,
+    });
+  }
+  return [...perIp.values()].sort((a, b) => b.count - a.count).slice(0, n);
+}
+
+function loginsByIp(logins: SshLoginEvent[]): SshActivity['logins'] {
+  const grouped = new Map<string, SshActivity['logins'][number]>();
+  for (const { at, user, ip, method } of logins) {
+    const key = `${user} ${ip} ${method}`;
+    const prev = grouped.get(key);
+    grouped.set(key, {
+      first: prev?.first ?? at,
+      at,
+      user,
+      ip,
+      method,
+      count: (prev?.count ?? 0) + 1,
+    });
+  }
+  return [...grouped.values()].sort((a, b) => b.count - a.count);
+}
+
+/** Failed attempts and successful logins in auth.log since `sinceMs`. */
+export function parseAuthLog(
+  text: string,
+  sinceMs: number,
+): Omit<SshActivity, 'banned' | 'banned_ips' | 'origins'> {
+  const { failed, logins } = authEvents(text);
+  const f = failed.filter((e) => e.ms >= sinceMs);
+  return {
+    failed_1h: f.length,
+    top_failed: topFailed(f, 3),
+    logins: loginsByIp(logins.filter((e) => e.ms >= sinceMs)),
+  };
+}
+
+export interface SshWindow {
+  failed: number;
+  ips: number;
+  logins: number;
+  top_failed: SshActivity['top_failed'];
+  logins_by_ip: SshActivity['logins'];
+}
+
+export interface SshHistory {
+  /** Oldest auth.log line still on disk; windows reaching further back are partial. */
+  log_since: string | null;
+  windows: Record<'30d' | '7d' | '24h' | '1h', SshWindow>;
+  /** Last 30 days by WIB date, newest first. */
+  daily: { date: string; failed: number; logins: number }[];
+  failed_1h: { at: string; ip: string; user: string }[];
+  logins_24h: { at: string; ip: string; user: string; method: string }[];
+  origins: Record<string, string>;
+}
+
+const HOUR = 3600000;
+const WIB = 7 * HOUR;
+
+export function sshHistory(
+  ev: { failed: SshEvent[]; logins: SshLoginEvent[] },
+  nowMs: number,
+): Omit<SshHistory, 'origins'> {
+  const spans = { '30d': 720, '7d': 168, '24h': 24, '1h': 1 } as const;
+  const windows = {} as SshHistory['windows'];
+  for (const [name, hours] of Object.entries(spans)) {
+    const since = nowMs - hours * HOUR;
+    const f = ev.failed.filter((e) => e.ms >= since);
+    const l = ev.logins.filter((e) => e.ms >= since);
+    windows[name as keyof typeof spans] = {
+      failed: f.length,
+      ips: new Set(f.map((e) => e.ip)).size,
+      logins: l.length,
+      top_failed: topFailed(f, 10),
+      logins_by_ip: loginsByIp(l),
+    };
+  }
+  const wibDate = (ms: number) => new Date(ms + WIB).toISOString().slice(0, 10);
+  const daily = Array.from({ length: 30 }, (_, i) => ({
+    date: wibDate(nowMs - i * 24 * HOUR),
+    failed: 0,
+    logins: 0,
+  }));
+  const byDate = new Map(daily.map((d) => [d.date, d]));
+  for (const e of ev.failed) {
+    const d = byDate.get(wibDate(e.ms));
+    if (d) d.failed++;
+  }
+  for (const e of ev.logins) {
+    const d = byDate.get(wibDate(e.ms));
+    if (d) d.logins++;
+  }
+  const first = Math.min(
+    ev.failed[0]?.ms ?? Infinity,
+    ev.logins[0]?.ms ?? Infinity,
+  );
+  return {
+    log_since: Number.isFinite(first) ? new Date(first).toISOString() : null,
+    windows,
+    daily,
+    failed_1h: ev.failed
+      .filter((e) => e.ms >= nowMs - HOUR)
+      .map(({ at, ip, user }) => ({ at, ip, user })),
+    logins_24h: ev.logins
+      .filter((e) => e.ms >= nowMs - 24 * HOUR)
+      .map(({ at, ip, user, method }) => ({ at, ip, user, method })),
+  };
+}
+
+// Rotated logs never change, so their parsed events are kept until they rotate again.
+const rotatedEvents = new Map<
+  string,
+  { key: string; ev: ReturnType<typeof authEvents> }
+>();
+
+/** auth.log plus its rotations (auth.log.1, auth.log.N.gz), oldest first. */
+async function allAuthEvents() {
+  const dir = '/var/log';
+  const files = (await readdir(dir))
+    .filter((f) => /^auth\.log(\.\d+(\.gz)?)?$/.test(f))
+    .sort(
+      (a, b) => (Number(b.split('.')[2]) || 0) - (Number(a.split('.')[2]) || 0),
+    );
+  const failed: SshEvent[] = [];
+  const logins: SshLoginEvent[] = [];
+  for (const f of files) {
+    const path = `${dir}/${f}`;
+    let ev: ReturnType<typeof authEvents>;
+    try {
+      const st = await stat(path);
+      const key = `${st.mtimeMs}:${st.size}`;
+      const hit = rotatedEvents.get(f);
+      if (f !== 'auth.log' && hit?.key === key) ev = hit.ev;
+      else {
+        const raw = await readFile(path);
+        ev = authEvents(
+          (f.endsWith('.gz') ? gunzipSync(raw) : raw).toString('utf8'),
+        );
+        if (f !== 'auth.log') rotatedEvents.set(f, { key, ev });
+      }
+    } catch {
+      continue; // unreadable rotation: the window just covers less
+    }
+    failed.push(...ev.failed);
+    logins.push(...ev.logins);
+  }
+  return { failed, logins };
+}
+
+/** Whois origins for `ips`, waiting at most `waitMs`; slower lookups land in the cache for next time. */
+async function originsFor(ips: string[], waitMs = 6000) {
+  const unique = [...new Set(ips)];
+  await Promise.race([
+    Promise.all(unique.map(ipOrigin)),
+    new Promise((r) => setTimeout(r, waitMs)),
+  ]);
+  return Object.fromEntries(unique.map((ip) => [ip, whoisCache.get(ip) ?? '']));
+}
+
+async function sshHistoryNow(): Promise<SshHistory> {
+  const h = sshHistory(await allAuthEvents(), Date.now());
+  const w = Object.values(h.windows);
+  const origins = await originsFor([
+    ...w.flatMap((x) => x.top_failed.map((f) => f.ip)),
+    ...w.flatMap((x) => x.logins_by_ip.map((l) => l.ip)),
+    ...h.failed_1h.map((f) => f.ip),
+  ]);
+  return { ...h, origins };
 }
 
 /** What the hourly Telegram report flags with ⚠️. */
@@ -74,6 +384,11 @@ export function serverWarnings(s: Omit<ServerStatus, 'warnings'>): string[] {
     if (c.days_left < 14)
       w.push(`SSL ${c.domain} habis ${c.days_left} hari lagi`);
   }
+  // Password login is disabled in sshd; one succeeding means that was undone.
+  for (const l of s.ssh.logins) {
+    if (l.method !== 'publickey')
+      w.push(`Login SSH pakai ${l.method} berhasil: ${l.user} dari ${l.ip}`);
+  }
   return w;
 }
 
@@ -93,6 +408,7 @@ export class ServerStatusController {
   @Get()
   async status(
     @Headers('x-status-token') token?: string,
+    @Query('history') history?: string,
   ): Promise<ServerStatus> {
     const expected = this.config.get<string>('STATUS_TOKEN');
     if (!expected) throw new NotFoundException();
@@ -102,17 +418,29 @@ export class ServerStatusController {
       throw new ForbiddenException();
     }
 
-    const [usage, mem, disk, services, database, top, certificates, backup] =
-      await Promise.all([
-        cpuUsagePercent(),
-        meminfo(),
-        statfs('/'),
-        serviceStates(['postgresql', 'nginx']),
-        this.database(),
-        topProcesses(),
-        certificateDays(),
-        lastBackupHours(),
-      ]);
+    const [
+      usage,
+      mem,
+      disk,
+      services,
+      database,
+      top,
+      certificates,
+      backup,
+      ssh,
+      sshHistoryData,
+    ] = await Promise.all([
+      cpuUsagePercent(),
+      meminfo(),
+      statfs('/'),
+      serviceStates(['postgresql', 'nginx', 'fail2ban']),
+      this.database(),
+      topProcesses(),
+      certificateDays(),
+      lastBackupHours(),
+      sshActivity(),
+      history === '1' ? sshHistoryNow() : undefined,
+    ]);
     const diskTotal = disk.blocks * disk.bsize;
     const diskFree = disk.bavail * disk.bsize;
     const status = {
@@ -143,8 +471,13 @@ export class ServerStatusController {
       top_processes: top,
       certificates,
       last_backup_hours: backup,
+      ssh,
     };
-    return { ...status, warnings: serverWarnings(status) };
+    return {
+      ...status,
+      ...(sshHistoryData && { ssh_history: sshHistoryData }),
+      warnings: serverWarnings(status),
+    };
   }
 
   private async database() {
@@ -249,6 +582,47 @@ async function certificateDays() {
   } catch {
     return [];
   }
+}
+
+/** SSH activity of the last hour from the tail of auth.log, plus fail2ban's ban count. */
+async function sshActivity(): Promise<SshActivity> {
+  // ponytail: reads only the last 4 MB (~hours of bot noise) and the current file; an hour
+  // spanning logrotate loses the part in auth.log.1.
+  let text = '';
+  try {
+    const fh = await open('/var/log/auth.log', 'r');
+    try {
+      const { size } = await fh.stat();
+      const start = Math.max(0, size - 4 * MB);
+      const buf = Buffer.alloc(size - start);
+      await fh.read(buf, 0, buf.length, start);
+      text = buf.toString('utf8');
+    } finally {
+      await fh.close();
+    }
+  } catch {
+    // no auth.log: report zeros rather than fail the whole status
+  }
+  let banned: number | null = null;
+  const bannedIps = new Set<string>();
+  for (const jail of ['sshd', 'recidive']) {
+    try {
+      const { stdout } = await run('fail2ban-client', ['status', jail]);
+      const list = /Banned IP list:[ \t]*(.*)/.exec(stdout)?.[1] ?? '';
+      for (const ip of list.split(/\s+/)) if (isIP(ip)) bannedIps.add(ip);
+      banned = bannedIps.size;
+    } catch {
+      // fail2ban (or this jail) not running; its service state already shows that
+    }
+  }
+  const activity = parseAuthLog(text, Date.now() - 3600000);
+  const banned_ips = [...bannedIps];
+  const origins = await originsFor([
+    ...activity.top_failed.map((f) => f.ip),
+    ...activity.logins.map((l) => l.ip),
+    ...banned_ips,
+  ]);
+  return { ...activity, banned, banned_ips, origins };
 }
 
 /** Hours since the newest file in /root/backups (manual pre-deploy dumps). */
