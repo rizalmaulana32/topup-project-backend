@@ -8,8 +8,11 @@ import {
   Post,
   Query,
   StreamableFile,
+  UseGuards,
 } from '@nestjs/common';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
+import { Throttle } from '@nestjs/throttler';
+import { ClientIpThrottlerGuard } from '../common/client-ip-throttler.guard';
 import { CheckIdDto } from './dto/check-id.dto';
 import { CheckoutCustomAmountDto } from './dto/checkout-custom-amount.dto';
 import { EstimateCustomAmountDto } from './dto/estimate-custom-amount.dto';
@@ -82,7 +85,14 @@ export class TopupController {
   }
 
   @Get('transactions/:id')
-  @ApiOperation({ summary: "Check a transaction's current status" })
+  // Polled every 5s by the status page: never serve it from a cache.
+  @Header('Cache-Control', 'no-store')
+  @UseGuards(ClientIpThrottlerGuard)
+  @Throttle({ default: { limit: 60, ttl: 60000 } })
+  @ApiOperation({
+    summary:
+      "Check a transaction's current status (public, polled by the status page; 60/min per client IP). expired_at = invoice deadline; pending flips to expired within ~1 min after it.",
+  })
   async getTransactionStatus(@Param('id') id: string) {
     const data = await this.topupService.getTransactionStatus(id);
     return { success: true, data };

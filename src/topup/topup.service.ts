@@ -67,31 +67,25 @@ export class TopupService {
       throw new NotFoundException(`Transaction ${transactionId} not found`);
     }
 
-    let adminFee: string | null = null;
-    if (transaction.linkQuReference) {
-      try {
-        const status = await this.linkQuService.checkTransactionStatus(
-          transaction.id,
-        );
-        adminFee = status.fee;
-      } catch (error) {
-        // Fee is supplementary display info, not core to status-checking -
-        // degrade gracefully rather than fail the whole lookup if LinkQu's
-        // checkstatus call has trouble.
-        this.logger.warn(
-          `Could not fetch LinkQu fee for ${transactionId}: ${error instanceof Error ? error.message : 'unknown error'}`,
-        );
-      }
-    }
-
+    // Public and polled every 5s: DB only (no LinkQu call), and nothing the
+    // customer didn't already see at checkout (no referral, cost or fee).
     return {
       transaction_id: transaction.id,
       payment_status: transaction.paymentStatus,
       provider_status: transaction.providerStatus,
       product_name: transaction.product?.name ?? null,
+      // Total coin sent, bonus included - the same sum handleInvoicePaid sends.
+      coin_amount: transaction.product
+        ? (
+            Number(transaction.product.coinAmount) +
+            Number(transaction.product.bonusCoin)
+          ).toFixed(2)
+        : transaction.coinAmount,
       gross_amount: transaction.grossAmount,
-      admin_fee: adminFee,
+      target_user_id: transaction.targetUserId,
       created_at: transaction.createdAt,
+      // Invoice deadline; payment_status flips to expired within ~1 min after (reconciliation cron).
+      expired_at: invoiceExpiresAt(transaction.createdAt),
       paid_at: transaction.paidAt,
       completed_at: transaction.completedAt,
     };

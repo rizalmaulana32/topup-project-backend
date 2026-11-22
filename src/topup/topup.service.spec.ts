@@ -177,71 +177,57 @@ describe('TopupService', () => {
   });
 
   describe('getTransactionStatus', () => {
-    it('includes the LinkQu fee for a transaction with a linkqu_reference', async () => {
+    it('returns only the public status fields, from the DB alone (no LinkQu call per poll)', async () => {
+      const createdAt = new Date('2026-08-05T03:00:00Z');
       transactionsService.findByExternalId.mockResolvedValue({
         id: 'TRX-20260805-0001',
-        paymentStatus: PaymentStatus.PAID,
-        providerStatus: null,
-        linkQuReference: 'DS3460326ABC',
-        grossAmount: '10000.00',
-        product: null,
-        createdAt: new Date(),
-        paidAt: new Date(),
-        completedAt: new Date(),
-      } as any);
-      linkQuService.checkTransactionStatus.mockResolvedValue({
-        statusCode: 'success',
-        statusMessage: 'SUCCESS',
-        fee: '5000.00',
-      });
-
-      const result = await service.getTransactionStatus('TRX-20260805-0001');
-
-      expect(linkQuService.checkTransactionStatus).toHaveBeenCalledWith(
-        'TRX-20260805-0001',
-      );
-      expect(result.admin_fee).toBe('5000.00');
-    });
-
-    it('does not call LinkQu and returns a null fee for a transaction with no linkqu_reference', async () => {
-      transactionsService.findByExternalId.mockResolvedValue({
-        id: 'TRX-20260805-0002',
         paymentStatus: PaymentStatus.PENDING,
-        providerStatus: null,
-        linkQuReference: null,
-        grossAmount: '10000.00',
+        providerStatus: 'pending',
+        linkQuReference: 'DS3460326ABC',
+        grossAmount: '300000.00',
+        coinAmount: '302100.00',
+        costBasis: '290000.00',
+        referralCode: 'AFF123',
+        targetUserId: '7100006',
         product: null,
-        createdAt: new Date(),
+        createdAt,
         paidAt: null,
         completedAt: null,
       } as any);
 
-      const result = await service.getTransactionStatus('TRX-20260805-0002');
+      const result = await service.getTransactionStatus('TRX-20260805-0001');
 
       expect(linkQuService.checkTransactionStatus).not.toHaveBeenCalled();
-      expect(result.admin_fee).toBeNull();
+      expect(result).toEqual({
+        transaction_id: 'TRX-20260805-0001',
+        payment_status: 'pending',
+        provider_status: 'pending',
+        product_name: null,
+        coin_amount: '302100.00',
+        gross_amount: '300000.00',
+        target_user_id: '7100006',
+        created_at: createdAt,
+        expired_at: new Date('2026-08-06T03:00:00Z'),
+        paid_at: null,
+        completed_at: null,
+      });
     });
 
-    it('degrades gracefully to a null fee if the LinkQu fee lookup fails', async () => {
+    it('reports a catalog product transaction as product coin + bonus coin', async () => {
       transactionsService.findByExternalId.mockResolvedValue({
-        id: 'TRX-20260805-0003',
+        id: 'TRX-20260805-0002',
         paymentStatus: PaymentStatus.PAID,
-        providerStatus: null,
-        linkQuReference: 'DS3460326DEF',
+        providerStatus: 'success',
         grossAmount: '10000.00',
-        product: null,
+        coinAmount: null,
+        product: { name: 'ML 120', coinAmount: '100.00', bonusCoin: '20.00' },
         createdAt: new Date(),
-        paidAt: new Date(),
-        completedAt: new Date(),
       } as any);
-      linkQuService.checkTransactionStatus.mockRejectedValue(
-        new Error('LinkQu checkstatus request failed: HTTP 500'),
-      );
 
-      const result = await service.getTransactionStatus('TRX-20260805-0003');
+      const result = await service.getTransactionStatus('TRX-20260805-0002');
 
-      expect(result.admin_fee).toBeNull();
-      expect(result.transaction_id).toBe('TRX-20260805-0003');
+      expect(result.coin_amount).toBe('120.00');
+      expect(result.product_name).toBe('ML 120');
     });
   });
 

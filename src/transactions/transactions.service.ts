@@ -160,7 +160,12 @@ export class TransactionsService {
    */
   async markPaid(transactionId: string): Promise<boolean> {
     const result = await this.transactionRepository.update(
-      { id: transactionId, paymentStatus: PaymentStatus.PENDING },
+      {
+        id: transactionId,
+        // EXPIRED too: a last-second payment whose callback lands after the
+        // reconciliation cron expired it is still money received.
+        paymentStatus: In([PaymentStatus.PENDING, PaymentStatus.EXPIRED]),
+      },
       { paymentStatus: PaymentStatus.PAID, paidAt: new Date() },
     );
     return (result.affected ?? 0) > 0;
