@@ -1392,16 +1392,7 @@ export class AffiliatesService {
       .where('log.type = :type', { type: CommissionLogType.CREDIT })
       .andWhere('log.affiliator_id IN (:...ids)', { ids: profileIds })
       .groupBy('log.affiliator_id');
-    if (period.dateFrom) {
-      qb.andWhere('log.created_at >= :dateFrom::date', {
-        dateFrom: period.dateFrom,
-      });
-    }
-    if (period.dateTo) {
-      qb.andWhere("log.created_at < (:dateTo::date + interval '1 day')", {
-        dateTo: period.dateTo,
-      });
-    }
+    whereJakartaDate(qb, 'log.created_at', period.dateFrom, period.dateTo);
     const rows: {
       affiliator_id: string;
       transaction_count: string;

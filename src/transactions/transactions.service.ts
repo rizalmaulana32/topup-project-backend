@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, IsNull, Not, Repository } from 'typeorm';
 import { insertWithOrderId } from '../common/utils/id-generator.util';
+import { whereJakartaDate } from '../common/utils/list-query.util';
 import {
   PaymentStatus,
   ProviderStatus,
@@ -106,17 +107,7 @@ export class TransactionsService {
     if (params.status) {
       query.andWhere('t.payment_status = :status', { status: params.status });
     }
-    if (params.dateFrom) {
-      query.andWhere('t.created_at >= :dateFrom', {
-        dateFrom: params.dateFrom,
-      });
-    }
-    if (params.dateTo) {
-      // Inclusive of the whole end day - date_to is a calendar date, not a timestamp.
-      query.andWhere("t.created_at < (:dateTo::date + interval '1 day')", {
-        dateTo: params.dateTo,
-      });
-    }
+    whereJakartaDate(query, 't.created_at', params.dateFrom, params.dateTo);
     if (params.referralCode) {
       query.andWhere('t.referral_code = :referralCode', {
         referralCode: params.referralCode,

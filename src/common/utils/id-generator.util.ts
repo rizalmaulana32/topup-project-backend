@@ -13,12 +13,10 @@ import type { QueryDeepPartialEntity } from 'typeorm/query-builder/QueryPartialE
  * dev-doc/topup-affiliate-platform/database-diagram.md.
  */
 export function generateOrderId(prefix: string): string {
-  const now = new Date();
-  const datePart = [
-    now.getFullYear(),
-    String(now.getMonth() + 1).padStart(2, '0'),
-    String(now.getDate()).padStart(2, '0'),
-  ].join('');
+  // WIB day, not the server's (prod runs UTC: 00:00-06:59 WIB got yesterday's date).
+  const datePart = new Date()
+    .toLocaleDateString('sv-SE', { timeZone: 'Asia/Jakarta' })
+    .replace(/-/g, '');
   const sequencePart = String(Math.floor(Math.random() * 10000)).padStart(
     4,
     '0',
