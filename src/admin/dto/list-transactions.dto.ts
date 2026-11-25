@@ -47,6 +47,15 @@ export class ListTransactionsDto {
   @IsDateString()
   date_to?: string;
 
+  // Transaction ID, exact match. Trimmed and a leading '#' dropped, since
+  // admins copy it from the table, which shows it as "#TRX-...".
+  @IsOptional()
+  @Transform(({ value }: { value: unknown }) =>
+    typeof value === 'string' ? value.trim().replace(/^#/, '') : value,
+  )
+  @IsString()
+  transaction_id?: string;
+
   // "Referral Code" filter in the admin UI.
   @IsOptional()
   @IsString()

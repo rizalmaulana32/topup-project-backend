@@ -670,6 +670,44 @@ describe('Admin (e2e)', () => {
     ]);
   });
 
+  it('filters transactions by transaction_id (trims spaces and a leading #)', async () => {
+    await transactionRepository.save([
+      transactionRepository.create({
+        id: 'TRX-ID-FILTER-1',
+        targetUserId: '11111111',
+        grossAmount: '10000.00',
+        paymentStatus: PaymentStatus.PAID,
+        providerStatus: ProviderStatus.SUCCESS,
+      }),
+      transactionRepository.create({
+        id: 'TRX-ID-FILTER-2',
+        targetUserId: '22222222',
+        grossAmount: '10000.00',
+        paymentStatus: PaymentStatus.PAID,
+        providerStatus: ProviderStatus.SUCCESS,
+      }),
+    ]);
+
+    const response = await request(app.getHttpServer())
+      .get('/api/v1/admin/transactions')
+      .query({
+        transaction_id: ' #TRX-ID-FILTER-1 ',
+        status: 'sukses',
+        limit: 20,
+        offset: 0,
+      })
+      .set('Authorization', `Bearer ${superadminToken}`)
+      .expect(200);
+
+    const body = response.body as {
+      data: { items: { id: string }[]; total: number };
+    };
+    expect(body.data.items.map((item) => item.id)).toEqual(['TRX-ID-FILTER-1']);
+    expect(body.data.total).toBe(1);
+
+    await transactionRepository.delete(['TRX-ID-FILTER-1', 'TRX-ID-FILTER-2']);
+  });
+
   it('totals paid transactions - gross-only and including the real LinkQu fee (2026-10-10 client request)', async () => {
     await transactionRepository.save([
       transactionRepository.create({

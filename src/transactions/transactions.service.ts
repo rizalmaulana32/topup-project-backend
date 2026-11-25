@@ -85,6 +85,7 @@ export class TransactionsService {
 
   async findAll(params: {
     status?: PaymentStatus;
+    transactionId?: string;
     dateFrom?: string;
     dateTo?: string;
     referralCode?: string;
@@ -106,6 +107,11 @@ export class TransactionsService {
 
     if (params.status) {
       query.andWhere('t.payment_status = :status', { status: params.status });
+    }
+    if (params.transactionId) {
+      query.andWhere('t.id = :transactionId', {
+        transactionId: params.transactionId,
+      });
     }
     whereJakartaDate(query, 't.created_at', params.dateFrom, params.dateTo);
     if (params.referralCode) {

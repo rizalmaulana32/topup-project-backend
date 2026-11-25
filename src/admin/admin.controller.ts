@@ -800,7 +800,7 @@ export class AdminController {
   @Get('transactions/export')
   @ApiOperation({
     summary:
-      'Download the successful (paid) transactions as an .xlsx file. Filters: date_from/date_to, referral_code, target_user_id, amount_min/amount_max, as in GET /transactions; status is always paid, and limit/offset are ignored (max 10000 rows, newest first). Built in memory per request, nothing is stored on the server.',
+      'Download the successful (paid) transactions as an .xlsx file. Filters: transaction_id, date_from/date_to, referral_code, target_user_id, amount_min/amount_max, as in GET /transactions; status is always paid, and limit/offset are ignored (max 10000 rows, newest first). Built in memory per request, nothing is stored on the server.',
   })
   async exportTransactions(
     @Query() query: ListTransactionsDto,
@@ -808,6 +808,7 @@ export class AdminController {
     const result = await this.transactionsService.findAll({
       // Only successful transactions are exported (client request, 2026-11-07).
       status: PaymentStatus.PAID,
+      transactionId: query.transaction_id,
       dateFrom: query.date_from,
       dateTo: query.date_to,
       referralCode: query.referral_code,
@@ -848,6 +849,7 @@ export class AdminController {
   async listTransactions(@Query() query: ListTransactionsDto) {
     const result = await this.transactionsService.findAll({
       status: query.status,
+      transactionId: query.transaction_id,
       dateFrom: query.date_from,
       dateTo: query.date_to,
       referralCode: query.referral_code,
